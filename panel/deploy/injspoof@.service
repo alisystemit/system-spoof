@@ -1,0 +1,40 @@
+# injspoof — unit template (هسته‌ی تونل لایه‌دو)
+#
+# یک instance به ازای هر کانفیگ:
+#     systemctl start injspoof@server
+# نام instance همان base فایل کانفیگ است:
+#     /etc/injspoof/<instance>.json        کانفیگ (همان فایلی که پنل PUT می‌کند)
+#     /etc/injspoof/<instance>.conf        EnvironmentFile: INJSPOOF_CONFIG / _MODE
+#     /etc/injspoof/wrapper/<instance>.sh  خط فرمان واقعی
+# install.sh هر سه را می‌نویسد و نام‌ها را در /etc/injspoof/instances.cfg فهرست
+# می‌کند؛ همان فهرست را injspoof-nodectl می‌خواند.
+#
+# حق دسترسی: CAP_NET_RAW (و برای fastpath: +CAP_BPF,CAP_NET_ADMIN) با setcap روی
+# خود باینری گذاشته می‌شود. NoNewPrivileges در این واحد عمداً تنظیم نشده:
+# آن گزینه file-capability را بی‌اثر می‌کند و هسته دیگر نمی‌تواند فریم خام بفرستد.
+
+[Unit]
+Description=injspoof L2 tunnel node (%i)
+Documentation=file:/usr/local/share/doc/injspoof/README.md
+Wants=network-online.target
+After=network-online.target injspoof-firewall@%i.service
+
+[Service]
+Type=exec
+EnvironmentFile=-/etc/injspoof/%i.conf
+ExecStart=/bin/sh /etc/injspoof/wrapper/%i.sh
+Restart=on-failure
+RestartSec=3
+
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+# API هسته کانفیگ را با نوشتن فایل موقت + rename روی دیسک جایگزین می‌کند
+# (src/api.c:447-459)، پس /etc/injspoof باید نوشتنی باشد وگرنه PUT کانفیگ
+# و hard reload از پنل می‌شکند.
+ReadWritePaths=/etc/injspoof /var/log/injspoof /var/lib/injspoof
+CapabilityBoundingSet=CAP_NET_RAW CAP_BPF CAP_NET_ADMIN
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

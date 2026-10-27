@@ -459,6 +459,183 @@ window.PB = (function () {
     }
   };
 
+  /* -------------------------------------------------------------- core */
+  /* صفحه‌ی «هسته»: همه‌ی کارها از راه /api/core/* و در نهایت helper
+     injspoof-nodectl انجام می‌شود. متن خروجی همان چیزی است که helper
+     نوشته؛ پنل چیزی را بازخوانی نمی‌کند. */
+  const core = {
+    nodeId: "",
+    instance: "",
+    disk: "",
+
+    init() {
+      const root = el("core");
+      if (!root) return;
+      this.nodeId = root.dataset.node || "";
+      this.instance = "";
+      const sel = el("core-node");
+      if (sel) sel.addEventListener("change", () => {
+        location.href = "/core?node=" + sel.value;
+      });
+
+      $$("[data-svc]").forEach((b) => b.addEventListener("click", () => {
+        const act = b.dataset.svc;
+        if (act !== "status" &&
+            !confirm(`«${act}» روی injspoof@${this.instance || "…"} اجرا شود؟`)) return;
+        this.post("/api/core/service", { action: act, node_id: Number(this.nodeId) }, b)
+          .then((r) => { if (r && r.ok) this.refresh(); });
+      }));
+
+      const bind = (id, fn) => {
+        const b = el(id);
+        if (b) b.addEventListener("click", fn);
+      };
+      bind("btn-refresh", () => this.refresh());
+      bind("btn-rescan", () => this.post("/api/core/rescan", { node_id: Number(this.nodeId) }));
+      bind("btn-logs", () => this.post("/api/core/logs", {
+        node_id: Number(this.nodeId), lines: Number(el("log-lines").value)
+      }));
+      bind("btn-write-disk", () => {
+        if (!this.disk) { this.say("کانفیگ دیسک خوانده نشده است.", true); return; }
+        if (!confirm("همین متن کانفیگ روی دیسک نوشته" +
+            (el("write-restart").checked ? " و سرویس restart" : "") + " می‌شود. ادامه؟")) return;
+        this.post("/api/core/config/write", {
+          node_id: Number(this.nodeId), config: this.disk,
+          restart: el("write-restart").checked, note: "بازنویسی کانفیگ دیسک از صفحه‌ی هسته"
+        });
+      });
+      bind("btn-pull-live", () => this.pullLive());
+      bind("btn-dl-disk", () => {
+        if (this.disk) downloadText(`injspoof-${this.instance || "node"}.json`, this.disk);
+      });
+      bind("btn-fw-preview", () => this.fwScript(false));
+      bind("btn-fw-download", () => this.fwScript(true));
+      bind("btn-fw-apply", () => {
+        if (!confirm("قواعد nft روی این ماشین اعمال شود؟")) return;
+        this.post("/api/core/firewall/apply", { node_id: Number(this.nodeId) });
+      });
+      const up = el("btn-update");
+      if (up) up.addEventListener("click", () => {
+        if (!confirm("git pull و install.sh --update اجرا شود؟ چند لحظه طول می‌کشد.")) return;
+        this.post("/api/core/update", {}, up, 240000).then(() => this.refresh());
+      });
+
+      this.refresh();
+      this.pollLive();
+      setInterval(() => this.pollLive(), 5000);
+    },
+
+    say(text, bad) {
+      const box = el("core-out");
+      if (box) showResult(box, typeof text === "string" ? text : JSON.stringify(text, null, 2), bad);
+    },
+
+    async post(path, body, btn, timeout) {
+      if (btn) btn.disabled = true;
+      const t = btn ? btn.textContent : "";
+      if (btn) btn.textContent = "در حال اجرا…";
+      try {
+        const r = await api(path, { method: "POST", body: JSON.stringify(body),
+                                    signal: timeout ? AbortSignal.timeout(timeout) : undefined });
+        this.say(r.output || r.error || (r.ok ? "انجام شد" : "خطا"), !r.ok);
+        if (r.issues && r.issues.length) {
+          this.say((r.error || "") + "\n" + JSON.stringify(r.issues, null, 2), true);
+        }
+        return r;
+      } catch (e) {
+        this.say("خطا: " + e.message, true);
+        return null;
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = t; }
+      }
+    },
+
+    async refresh() {
+      if (!this.nodeId) return;
+      try {
+        const r = await api("/api/core/info?node=" + this.nodeId);
+        this.instance = r.instance || "";
+        this.disk = r.disk_config || "";
+        const svc = el("k-service");
+        if (svc) {
+          svc.textContent = r.service;
+          svc.closest(".stat").classList.toggle("is-ok", r.service === "active");
+        }
+        const api_ = el("k-api");
+        if (api_ && r.api_alive !== null && r.api_alive !== undefined) {
+          api_.textContent = r.api_alive ? "زنده" : "قطع";
+          api_.closest(".stat").classList.toggle("is-bad", !r.api_alive);
+          const sub = el("k-api-sub");
+          if (sub) sub.textContent = r.api_error || (r.node ? r.node.api_url : "");
+        }
+        const issues = el("core-issues");
+        if (issues) renderIssues(issues, r.issues, r.summary);
+        if (r.config_error) this.say(r.config_error, true);
+      } catch (e) { /* صفحه بدون helper هم معنا دارد؛ خطا را فریاد نمی‌زنیم */ }
+    },
+
+    async pullLive() {
+      if (!this.nodeId) return;
+      try {
+        const r = await api(`/api/config/load/${this.nodeId}`);
+        if (!r.ok) throw new Error(r.error || "نود در دسترس نیست");
+        this.disk = r.config;
+        renderIssues(el("core-issues"), r.issues, r.summary);
+        const ok = await this.post("/api/core/config/write", {
+          node_id: Number(this.nodeId), config: r.config,
+          restart: el("write-restart").checked,
+          note: "بازگردانی کانفیگ زنده‌ی نود روی دیسک"
+        });
+        if (ok && ok.ok) this.say("کانفیگ زنده روی دیسک نوشته شد.\n" + (ok.output || ""), false);
+      } catch (e) {
+        this.say("خواندن کانفیگ زنده شکست: " + e.message, true);
+      }
+    },
+
+    async fwScript(download) {
+      const engine = el("fw-engine").value;
+      try {
+        const r = await api(`/api/core/firewall/script?node=${this.nodeId}&engine=${engine}`);
+        if (!r.ok || !r.script) throw new Error(r.error || "کانفیگی نیست");
+        if (download) {
+          downloadText(`injspoof-${this.instance || "node"}-${engine}.sh`, r.script, "text/x-sh");
+          return;
+        }
+        const pre = el("fw-script");
+        pre.textContent = r.script;
+        pre.classList.remove("hidden");
+      } catch (e) {
+        this.say("تولید اسکریپت فایروال: " + e.message, true);
+      }
+    },
+
+    async pollLive() {
+      const cell = el("k-livepps");
+      if (!cell || !this.nodeId) return;
+      try {
+        const r = await api(`/api/nodes/${this.nodeId}/series?limit=3`);
+        const samples = (r.samples || []).filter((s) => s.stats);
+        if (samples.length < 2) { cell.textContent = "—"; return; }
+        const a = traffic(samples[samples.length - 2].stats);
+        const b = traffic(samples[samples.length - 1].stats);
+        const dt = samples[samples.length - 1].ts - samples[samples.length - 2].ts;
+        cell.textContent = shortNum(rate(a.pkts_in, b.pkts_in, dt) +
+                                    rate(a.pkts_out, b.pkts_out, dt)) + " pps";
+      } catch (e) { /* ignore */ }
+    }
+  };
+
+  /* ---------------------------------------------------------- nodeForm */
+  const nodeForm = {
+    init() {
+      const box = el("is-local"), field = el("instance-field");
+      if (!box || !field) return;
+      const sync = () => field.classList.toggle("hidden", !box.checked);
+      box.addEventListener("change", sync);
+      sync();
+    }
+  };
+
   /* ------------------------------------------------------------ tree */
   function buildTree(container, model, onChange) {
     container.innerHTML = "";
@@ -960,5 +1137,6 @@ window.PB = (function () {
     }
   };
 
-  return { dash, nodes, editor, pair, history, api, utils: { fmtBytes, num, esc } };
+  return { dash, nodes, core, nodeForm, editor, pair, history, api,
+           utils: { fmtBytes, num, esc } };
 })();

@@ -1,6 +1,7 @@
 [Unit]
 Description=injspoof management panel (Flask + gunicorn)
 Documentation=file:@@PREFIX@@/README.md
+Documentation=file:@@PREFIX@@/GUIDE.md
 After=network-online.target
 Wants=network-online.target
 
@@ -22,10 +23,16 @@ ExecStart=@@VENV@@/bin/gunicorn \
 Restart=on-failure
 RestartSec=3
 
-NoNewPrivileges=true
+# NoNewPrivileges عمداً false است: صفحه‌ی «هسته» برای کنترل سرویس injspoof
+# دستور `sudo -n /usr/local/libexec/injspoof-nodectl …` می‌زند و با NNP=true
+# sudo نمی‌تواند مجوز بگیرد (کاربر پنل root نیست و خودِ سرویس هم مستقیم
+# چیزی را اجرا نمی‌کند). فایل sudoers فقط همین یک helper را باز می‌کند.
+NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
+# /etc و /usr برای پنل read-only می‌مانند (ProtectSystem=full)؛ نوشتن فقط در
+# state. نوشتن کانفیگ هسته و اعمال فایروال از راه helper ریشه‌پای انجام می‌شود.
 ReadWritePaths=@@STATEDIR@@
 LimitNOFILE=65536
 

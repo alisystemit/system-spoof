@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}پنل injspoof{% endblock %}</title>
+  <link rel="preload" href="{{ url_for('static', filename='fonts/Vazirmatn-Regular.woff2') }}"
+        as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -21,6 +23,8 @@
         <span class="ico">◧</span> داشبورد زنده</a>
       <a href="{{ url_for('nodes_page') }}" class="{{ 'active' if request.endpoint in ('nodes_page','node_form') }}">
         <span class="ico">⛁</span> نودها</a>
+      <a href="{{ url_for('core_page') }}" class="{{ 'active' if request.endpoint == 'core_page' }}">
+        <span class="ico">▣</span> هسته</a>
       <a href="{{ url_for('editor_page') }}" class="{{ 'active' if request.endpoint == 'editor_page' }}">
         <span class="ico">⚙</span> ویرایشگر کانفیگ</a>
       <a href="{{ url_for('pair_page') }}" class="{{ 'active' if request.endpoint == 'pair_page' }}">

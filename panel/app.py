@@ -11,7 +11,9 @@ from __future__ import annotations
 import collections
 import hmac
 import json
+import mimetypes
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -25,6 +27,8 @@ import db
 import gen
 import injclient
 import schema
+from core import CoreError            # noqa: F401  (برای خوانایی روت‌ها)
+import core as coreops
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APP = Flask(
@@ -36,6 +40,33 @@ APP.secret_key = os.environ.get("PANEL_SECRET") or secrets.token_hex(32)
 PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD") or ""
 SAMPLE_INTERVAL = float(os.environ.get("PANEL_INTERVAL", "2"))
 NODE_TIMEOUT = float(os.environ.get("PANEL_TIMEOUT", "4"))
+
+# فایل‌های فونت از /static سرو می‌شوند؛ در دیکشنری MIME چند توزیع پسوند
+# .woff2 ثبت نشده و application/octet-stream می‌شود.
+mimetypes.add_type("font/woff2", ".woff2")
+
+
+def read_version():
+    """نسخه‌ی پنل: متغیر محیطی PANEL_VERSION، وگرنه فایل VERSION کنار کد.
+
+    پنل پروژه‌ای مستقل است، پس شماره‌ی نسخه‌اش را خودش نگه می‌دارد و به
+    ریپوی هسته‌ی C وابسته نیست. اگر هیچ‌کدام نبود "dev".
+    """
+    env = os.environ.get("PANEL_VERSION", "").strip()
+    if env:
+        return env
+    try:
+        with open(os.path.join(BASE_DIR, "VERSION"), encoding="utf-8") as fh:
+            return fh.read().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+APP_VERSION = read_version()
+
+# همان الگویی که injspoof-nodectl برای نام instance می‌پذیرد. نگه داشتن یک
+# کپی در پنل یعنی پیام خطای فارسی قبل از رسیدن به helper، نه بعد از آن.
+INSTANCE_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
 
 # ======================================================================
 #  جمع‌آور نمونه‌ها در حافظه (برای نمودار زنده)
@@ -185,7 +216,7 @@ def helpers():
         "levels": {"error": "خطا", "warn": "هشدار", "info": "نکته"},
         "fmt_bytes": fmt_bytes,
         "fmt_uptime": fmt_uptime,
-        "APP_VERSION": os.environ.get("PANEL_VERSION", "1.0"),
+        "APP_VERSION": APP_VERSION,
         "needs_auth": bool(PANEL_PASSWORD),
     }
 
@@ -235,6 +266,9 @@ def node_form(node_id=None):
             "config_path": form.get("config_path", "").strip(),
             "note": form.get("note", "").strip(),
             "enabled": 1 if form.get("enabled") else 0,
+            # نود محلی = هسته‌ای که systemd آن را روی همین ماشین کنترل می‌کند.
+            "is_local": 1 if form.get("is_local") else 0,
+            "core_instance": form.get("core_instance", "").strip(),
         }
         errors = []
         if not data["name"]:
@@ -247,6 +281,17 @@ def node_form(node_id=None):
             errors.append("api_url قابل‌تحلیل نیست (مثال: http://127.0.0.1:9090)")
         if data["role"] == "client" and form.get("check_token") and not data["api_token"]:
             errors.append("توکن API خالی است.")
+        if data["is_local"]:
+            # همان الگویی که injspoof-nodectl می‌پذیرد؛ اینجا زودتر ردش می‌کنیم
+            # تا کاربر پیام خوانا ببیند نه «nodectl: نام instance نامعتبر».
+            inst = data["core_instance"]
+            if not inst or not INSTANCE_RE.match(inst):
+                errors.append("برای نود محلی، نام instance باید فقط حروف لاتین، رقم، "
+                              "نقطه، آدر یا خط تیره باشد (مثال: server).")
+            elif not coreops.available():
+                errors.append("روی این ماشین /usr/local/libexec/injspoof-nodectl نصب "
+                              "نیست؛ هسته را با panel/install.sh نصب کنید یا این تیک را "
+                              "بردارید و نود را فقط از راه API مدیریت کنید.")
         if errors:
             for e in errors:
                 flash(e, "error")
@@ -267,7 +312,10 @@ def node_form(node_id=None):
                       "warn")
             return redirect(url_for("nodes_page"))
     return render_template("node_form.html", node=node, tokens=_token_preview(node),
-                           interval=int(round(SAMPLE_INTERVAL)))
+                           interval=int(round(SAMPLE_INTERVAL)),
+                           core_available=coreops.available(),
+                           helper_path=coreops.helper_path(),
+                           default_instance=coreops.DEFAULT_INSTANCE)
 
 
 @APP.route("/nodes/<int:node_id>/delete", methods=["POST"])
@@ -532,6 +580,291 @@ def merge_into_node(node, pair):
     spec["hid"] = pair.get("hid") or spec.get("hid")
     merged, issues = gen.merge_client_into_server(current, spec)
     return merged, issues
+
+
+# ======================================================================
+#  هسته روی همین ماشین: سرویس، کانفیگ روی دیسک، فایروال، به‌روزرسانی
+# ======================================================================
+#
+# پنل خودroot نیست؛ همه‌ی این کارها از راه helper ریشه‌پای
+# /usr/local/libexec/injspoof-nodectl انجام می‌شود (core.py). آن helper فقط
+# instanceهایی را می‌پذیرد که در /etc/injspoof/instances.cfg ثبت شده‌اند، و
+# نام واحد را خودشان می‌سازد؛ پس پنل نمی‌تواند هر سرویسی را restart کند.
+
+def local_nodes():
+    with db.connect() as conn:
+        return [n for n in db.list_nodes(conn) if int(n.get("is_local") or 0)]
+
+
+def core_context(node=None):
+    """همه‌چیزی که صفحه‌ی «هسته» نشان می‌دهد: وضعیت نصب، سرویس، کانفیگ دیسک، API زنده."""
+    node = node or (local_nodes() or [None])[0]
+    state = coreops.describe(node)
+    out = {
+        "state": state,
+        "node": node,
+        "installed": bool(state.get("BINARY")) and state.get("BINARY") != "missing",
+        "controllable": bool(state.get("controllable")),
+        "service": state.get("SERVICE_STATE", "unknown"),
+        "firewall_service": state.get("FIREWALL_STATE", "unknown"),
+        "instance": state.get("instance", ""),
+        "config_path": state.get("CONFIG_PATH", ""),
+        "config_error": state.get("CONFIG_ERROR", ""),
+        "build_info": state.get("BUILD_INFO", ""),
+        "binary_caps": state.get("BINARY_CAPS", ""),
+        "update_allowed": state.get("UPDATE_ALLOWED") == "yes",
+        "disk_config": "",
+        "issues": [],
+        "summary": {"error": 0, "warn": 0, "info": 0},
+        "api_alive": None,
+        "api_error": "",
+    }
+    if out["controllable"] and out["instance"]:
+        ok, text = coreops.config_show(out["instance"])
+        if ok and text:
+            out["disk_config"] = text
+            try:
+                cfg = json.loads(text)
+                issues = schema.validate(cfg, (node or {}).get("role") or "server")
+                out["issues"] = issues
+                out["summary"] = schema.summary(issues)
+            except json.JSONDecodeError as exc:
+                out["config_error"] = f"کانفیگ دیسک JSON معتبر نیست: {exc}"
+    if node:
+        try:
+            info = node_client(node).info()
+            out["api_alive"] = True
+            out["api_info"] = info
+        except Exception as exc:                          # noqa: BLE001
+            out["api_alive"] = False
+            out["api_error"] = str(exc)
+    # رکورد نود در panel.db توکن API را دارد؛ هیچ‌وقت به JSON/مرورگر نمی‌رود.
+    if isinstance(out["node"], dict):
+        out["node"] = {k: v for k, v in out["node"].items() if k != "api_token"}
+    return out
+
+
+@APP.route("/core")
+@login_required
+def core_page():
+    node_id = request.args.get("node", type=int)
+    node = None
+    if node_id:
+        with db.connect() as conn:
+            node = db.get_node(conn, node_id)
+    ctx = core_context(node)
+    return render_template("core.html", nodes=local_nodes(), **ctx)
+
+
+@APP.route("/api/core/info")
+@login_required
+def api_core_info():
+    node_id = request.args.get("node", type=int)
+    node = None
+    if node_id:
+        with db.connect() as conn:
+            node = db.get_node(conn, node_id)
+    return jsonify(core_context(node))
+
+
+def core_instance_for(node):
+    """instance را از رکورد نود می‌گیرد؛ برای نود غیرمحلی None."""
+    if not node:
+        return None, "نودی انتخاب نشده."
+    inst = coreops.local_instance(node)
+    if not inst:
+        return None, (f"نود «{node['name']}» نود محلی این ماشین نیست؛ سرویسش از "
+                      "راه systemctl روی همان سرور کنترل می‌شود.")
+    return inst, ""
+
+
+@APP.route("/api/core/service", methods=["POST"])
+@login_required
+def api_core_service():
+    payload = request.get_json(force=True, silent=True) or {}
+    action = (payload.get("action") or "").strip()
+    with db.connect() as conn:
+        node = db.get_node(conn, payload.get("node_id") or 0)
+    inst, err = core_instance_for(node)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    ok, text = coreops.service(action, inst)
+    if ok and action in ("start", "restart"):
+        # توکن/آدرس تازه را در رکورد نود بنشان تا پنل قفل نشود
+        sync_local_node_token(node)
+    return jsonify({"ok": ok, "output": text, "action": action,
+                    "instance": inst}), (200 if ok else 502)
+
+
+@APP.route("/api/core/logs", methods=["POST"])
+@login_required
+def api_core_logs():
+    payload = request.get_json(force=True, silent=True) or {}
+    with db.connect() as conn:
+        node = db.get_node(conn, payload.get("node_id") or 0)
+    inst = coreops.local_instance(node) if node else coreops.DEFAULT_INSTANCE
+    ok, text = coreops.logs(inst, payload.get("lines") or 120)
+    return jsonify({"ok": ok, "output": text}), (200 if ok else 502)
+
+
+@APP.route("/api/core/rescan", methods=["POST"])
+@login_required
+def api_core_rescan():
+    """daemon-reload + وضعیت واحد؛ برای وقتی فایل .service تازه شده است."""
+    payload = request.get_json(force=True, silent=True) or {}
+    with db.connect() as conn:
+        node = db.get_node(conn, payload.get("node_id") or 0)
+    inst = coreops.local_instance(node) if node else coreops.DEFAULT_INSTANCE
+    ok, text = coreops.rescan(inst)
+    return jsonify({"ok": ok, "output": text}), (200 if ok else 502)
+
+
+@APP.route("/api/core/config/write", methods=["POST"])
+@login_required
+def api_core_config_write():
+    """کانفیگ را روی دیسک نود محلی می‌نویسد و سرویس را restart می‌کند.
+
+    مسیر جایگزین PUT /api/v1/config است: آن مسیر فقط وقتی کار می‌کند که هسته
+    بالا باشد. اینجا عمداً اول با همان قواعد schema.py اعتبارسنجی می‌شود تا
+    کانفیگی که loader رد می‌کند روی سرویس restart‌شده نگذارد (چرخه‌ی crash).
+    """
+    payload = request.get_json(force=True, silent=True) or {}
+    text = payload.get("config") or ""
+    restart = bool(payload.get("restart", True))
+    with db.connect() as conn:
+        node = db.get_node(conn, payload.get("node_id") or 0)
+    inst, err = core_instance_for(node)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    try:
+        cfg = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return jsonify({"ok": False, "stage": "json",
+                        "error": f"JSON نامعتبر: {exc}"}), 422
+    issues = schema.validate(cfg, node["role"])
+    if not schema.ok(issues):
+        return jsonify({"ok": False, "stage": "validate",
+                        "error": "کانفیگ خطای جدی دارد",
+                        "issues": [i for i in issues if i["level"] == schema.ERROR]}), 422
+    with db.connect() as conn, conn:
+        current = None
+        ok_show, shown = coreops.config_show(inst)
+        if ok_show and shown:
+            current = shown
+            db.save_version(conn, node["id"], current,
+                            note="بکاپ کانفیگ دیسک قبل از نوشتن پنل", source="pre-apply")
+        db.save_version(conn, node["id"], text,
+                        note=payload.get("note") or "نوشتن کانفیگ روی دیسک",
+                        source="core-disk")
+    ok, out = coreops.config_write(inst, json.dumps(cfg, indent=2, ensure_ascii=False))
+    if not ok:
+        return jsonify({"ok": False, "stage": "write", "error": out}), 502
+    result = {"ok": True, "stage": "written", "output": out, "instance": inst}
+    if restart:
+        rok, rout = coreops.service("restart", inst)
+        result["restart"] = {"ok": rok, "output": rout}
+        if rok:
+            sync_local_node_token(node)
+        if not rok:
+            logr, lout = coreops.logs(inst, 40)
+            result["logs"] = lout if logr else lout
+    return jsonify(result)
+
+
+@APP.route("/api/core/firewall/apply", methods=["POST"])
+@login_required
+def api_core_firewall_apply():
+    """قواعد بستن RST/ICMP کرنل را از روی کانفیگ فعلی می‌سازد و root اجرا می‌کند."""
+    payload = request.get_json(force=True, silent=True) or {}
+    with db.connect() as conn:
+        node = db.get_node(conn, payload.get("node_id") or 0)
+    inst, err = core_instance_for(node)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    cfg = None
+    try:
+        cfg = node_client(node).get_config()
+    except Exception:                                     # noqa: BLE001
+        ok, text = coreops.config_show(inst)
+        if ok and text:
+            try:
+                cfg = json.loads(text)
+            except json.JSONDecodeError:
+                cfg = None
+    if not cfg:
+        return jsonify({"ok": False,
+                        "error": "کانفیگ فعلی نود خوانده نشد؛ اول کانفیگ را اعمال کنید"}), 502
+    script = gen.nftables_script(cfg, node["name"], instance=inst)
+    ok, out = coreops.firewall_apply(inst, script)
+    return jsonify({"ok": ok, "output": out, "script": script}), (200 if ok else 502)
+
+
+@APP.route("/api/core/firewall/script")
+@login_required
+def api_core_firewall_script():
+    """پیش‌نمایش/دانلود اسکریپت فایروال (بدون اجرای هیچ دستوری)."""
+    node_id = request.args.get("node", type=int)
+    engine = request.args.get("engine", "nft")
+    with db.connect() as conn:
+        node = db.get_node(conn, node_id or 0)
+    inst = (coreops.local_instance(node) if node else "") or "server"
+    cfg = {}
+    text = ""
+    if node:
+        ok, shown = coreops.config_show(inst)
+        if ok and shown:
+            text = shown
+        else:
+            try:
+                cfg = node_client(node).get_config()
+            except Exception:                             # noqa: BLE001
+                cfg = {}
+    if not cfg and text:
+        try:
+            cfg = json.loads(text)
+        except json.JSONDecodeError:
+            cfg = {}
+    if not cfg:
+        return jsonify({"ok": False, "error": "کانفیگی برای تولید قواعد نیست"}), 404
+    script = (gen.nftables_script(cfg, node["name"] if node else inst, instance=inst)
+              if engine == "nft" else gen.iptables_script(cfg, inst))
+    return jsonify({"ok": True, "script": script, "engine": engine})
+
+
+@APP.route("/api/core/update", methods=["POST"])
+@login_required
+def api_core_update():
+    ok, out = coreops.update()
+    return jsonify({"ok": ok, "output": out}), (200 if ok else 502)
+
+
+def sync_local_node_token(node):
+    """api.token نود محلی را از کانفیگ دیسک به panel.db می‌آورد.
+
+    hot reload مقدار token را اعمال می‌کند؛ اگر کاربر توکن را در کانفیگ عوض
+    کرده باشد و رکورد پنل کهنه بماند، پنل خودش را از نود قفل می‌کند.
+    """
+    inst = coreops.local_instance(node)
+    if not (node and inst):
+        return False
+    ok, text = coreops.config_show(inst)
+    if not ok or not text:
+        return False
+    try:
+        token = (json.loads(text).get("api") or {}).get("token") or ""
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    if not token or token == node.get("api_token"):
+        return False
+    with db.connect() as conn, conn:
+        row = db.get_node(conn, node["id"])
+        if not row:
+            return False
+        data = dict(row)
+        data["api_token"] = token
+        db.upsert_node(conn, data)
+        node["api_token"] = token
+    return True
 
 
 # ======================================================================

@@ -1,5 +1,5 @@
 """
-gen.py — تولید خودکار جفت کانفیگ client/server به‌همراه اسکریپت فایروال
+gen.py — تولید کانفیگ هسته: استارتر، جفت client/server و اسکریپت فایروال
 
 ساختار خروجی دقیقاً همان چیزی است که src/config.c انتظار دارد. هم‌راستایی
 قوانین بر پایه‌ی منطق واقعی فیلتر در src/server.c و src/client.c ساخته می‌شود:
@@ -8,13 +8,26 @@ gen.py — تولید خودکار جفت کانفیگ client/server به‌هم
   فرستنده.outgoing.port.src    ->  گیرنده.incoming.port.src
   فرستنده.outgoing.protocol    ->  گیرنده.incoming.protocol
   فرستنده.outgoing.port.dst[0] =  پورت مقصد واقعی روی سیم
+
+CLI (همان توابعی که پنل صدا می‌زند؛ install.sh هسته هم از همین‌جا کانفیگ
+استارتر و اسکریپت فایروال را می‌نویسد، پس منطق یک‌جاست و روی هر OS تست می‌شود):
+
+    python3 gen.py starter --role server --api-bind 127.0.0.1:9090 \
+                           --token <tok> --out /etc/injspoof/server.json
+    python3 gen.py firewall --config /etc/injspoof/server.json \
+                            --role server --out /etc/injspoof/firewall/server.nft.sh
+    python3 gen.py detect            # نام WAN و MAC gateway از روی ماشین
 """
 
 from __future__ import annotations
 
 import copy
+import json
+import os
+import re
 import secrets
 import string
+import subprocess
 
 import schema
 
@@ -277,11 +290,40 @@ def _protocols(cfg):
     return names
 
 
-def nftables_script(cfg, hostname="injspoof-node"):
-    """اسکریپت idempotent بر پایه‌ی Table 1 و Table 2 در docs/OPERATIONS.md."""
+def _slug(text):
+    """نام instance/هاست را به برچسب امن shell و nft تبدیل می‌کند."""
+    out = re.sub(r"[^A-Za-z0-9_.-]", "-", str(text or "")).strip("-.")
+    return out[:32] or "node"
+
+
+def nftables_script(cfg, hostname="injspoof-node", instance=None):
+    """اسکریپت idempotent بر پایه‌ی Table 1 و Table 2 در docs/OPERATIONS.md.
+
+    اگر `instance` داده شود، chainها با پسوند همان instance نامیده می‌شوند
+    (out_<inst> / raw_<inst>) و اول flush می‌شوند: روی یک ماشین با چند نود،
+    اعمال دوباره‌ی کانفیگ یک نود قواعد نود دیگر را پاک نمی‌کند و قواعد
+    تکراری هم انباشته نمی‌شود. بدون instance، خروجی دقیقاً همان نام‌های
+    مستندات (output/raw) را می‌دهد تا برای کپی‌پیست دست‌کاری‌شده باشد.
+    """
     spoofed, dst = _wire_ports(cfg)
     protos = _protocols(cfg)
     ports = sorted(set(spoofed) | set(dst))
+    out_chain, raw_chain = "output", "raw"
+    prelude = [
+        "nft add table inet injspoof 2>/dev/null || true",
+        f"nft add chain inet injspoof {out_chain} '{{ type filter hook output priority 0; }}'",
+        f"nft add chain inet injspoof {raw_chain}    '{{ type filter hook output priority -300; }}'",
+    ]
+    if instance:
+        slug = _slug(instance)
+        out_chain, raw_chain = f"out_{slug}", f"raw_{slug}"
+        prelude = [
+            "nft add table inet injspoof 2>/dev/null || true",
+            f"nft add chain inet injspoof {out_chain} '{{ type filter hook output priority 0; }}'",
+            f"nft add chain inet injspoof {raw_chain}    '{{ type filter hook output priority -300; }}'",
+            f"nft flush chain inet injspoof {out_chain}",
+            f"nft flush chain inet injspoof {raw_chain}",
+        ]
     lines = [
         "#!/usr/bin/env bash",
         f"# injspoof kernel-response blocker — {hostname}",
@@ -289,11 +331,7 @@ def nftables_script(cfg, hostname="injspoof-node"):
         "# RST و ICMP error می‌فرستد و تونل را reset می‌کند (docs/OPERATIONS.md).",
         "set -euo pipefail",
         "",
-        "nft add table inet injspoof 2>/dev/null || true",
-        "nft add chain inet injspoof output '{ type filter hook output priority 0; }'",
-        "nft add chain inet injspoof raw    '{ type filter hook output priority -300; }'",
-        "",
-    ]
+    ] + prelude + [""]
     if not ports:
         lines.append("# هشدار: هیچ پورت مبدأ/مقصد مشخصی در کانفیگ نیست؛ "
                      "پورت‌ها در زمان بوت تصادفی انتخاب می‌شوند و این اسکریپت "
@@ -301,19 +339,19 @@ def nftables_script(cfg, hostname="injspoof-node"):
     if "tcp" in protos:
         lines.append("# --- Table 1: block outbound TCP RST ---")
         for p in ports:
-            lines.append(f"nft add rule inet injspoof output tcp sport {p} tcp flags rst drop")
+            lines.append(f"nft add rule inet injspoof {out_chain} tcp sport {p} tcp flags rst drop")
         for p in ports:
-            lines.append(f"nft add rule inet injspoof output tcp dport {p} tcp flags rst drop")
+            lines.append(f"nft add rule inet injspoof {out_chain} tcp dport {p} tcp flags rst drop")
         for p in spoofed:
-            lines.append(f"nft add rule inet injspoof raw tcp sport {p} notrack")
+            lines.append(f"nft add rule inet injspoof {raw_chain} tcp sport {p} notrack")
         lines.append("")
     if "udp" in protos or "icmp" in protos:
         lines.append("# --- Table 2: block outbound ICMP / UDP errors ---")
-        lines.append("nft add rule inet injspoof output icmp type destination-unreachable drop")
-        lines.append("nft add rule inet injspoof output icmp type destination-unreachable "
+        lines.append(f"nft add rule inet injspoof {out_chain} icmp type destination-unreachable drop")
+        lines.append(f"nft add rule inet injspoof {out_chain} icmp type destination-unreachable "
                      "icmp code port-unreachable drop")
         for p in spoofed:
-            lines.append(f"nft add rule inet injspoof raw udp sport {p} notrack")
+            lines.append(f"nft add rule inet injspoof {raw_chain} udp sport {p} notrack")
         lines.append("")
     lines.append('echo "injspoof blocker applied: ports ' +
                  (",".join(map(str, ports)) or "-") + '"')
@@ -346,4 +384,191 @@ def iptables_script(cfg, hostname="injspoof-node"):
         for p in spoofed:
             lines.append(f"iptables -t raw -A OUTPUT -p udp --sport {p} -j NOTRACK")
     lines.append("# پاک کردن: iptables -t raw -F OUTPUT && iptables -F OUTPUT")
+    lines.append("# هشدار: این نسخه هر اجرا قواعد را APPEND می‌کند؛ برای اعمال")
+    lines.append("# دوباره‌شونده (systemd، پنل) نسخه‌ی nftables را با instance بگیرید.")
     return "\n".join(lines) + "\n"
+
+
+# ======================================================================
+#  کانفیگ استارتر برای نصب هسته (install.sh از همین‌جا می‌نویسد)
+# ======================================================================
+
+PANEL_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(PANEL_DIR)                       # ریپوی injspoof (اگر کنار پنل باشد)
+EXAMPLE_DIR = os.path.join(ROOT, "example")             # منبع اصلی، کنار سورس C
+SEED_DIR = os.path.join(PANEL_DIR, "seed")               # کپی هم‌رسانده داخل پنل
+
+
+def example_path(role):
+    """مسیر کانفیگ نمونه: اول example/ ریپو، بعد seed/ خودِ پنل.
+
+    ردیف اول وقتی است که پنل کنار سورس C نصب شده (حالت عادی ریپو)؛ ردیف دوم
+    پنل را مستقل می‌کند: پوشه‌ی panel را تنهایی هم ببرید، تولید کانفیگ
+    استارتر کار می‌کند. seed/ همان example/ است، پس خروجی‌اش یکی است.
+    """
+    name = "client.json" if str(role).startswith("cli") else "server.json"
+    for base in (EXAMPLE_DIR, SEED_DIR):
+        path = os.path.join(base, name)
+        if os.path.isfile(path):
+            return path
+    raise FileNotFoundError(
+        f"کانفیگ نمونه‌ی {name} نه در {EXAMPLE_DIR} هست نه در {SEED_DIR}؛ "
+        f"اگر پنل را مستقل می‌برید پوشه‌ی seed/ باید کنار app.py باشد.")
+
+
+def load_example(role):
+    """example/server.json یا example/client.json را می‌خواند."""
+    with open(example_path(role), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def detect_wan():
+    """نام کارت شبکه‌ی پیش‌فرض و MAC gateway را از روی ماشین می‌خواند.
+
+    خروجی (iface, gw_mac, via_ip)؛ هر کدام می‌تواند '' باشد (ماشین غیرلینوکسی
+    یا iproute2 نصب‌نشده). فقط دستورهای read-only اجرا می‌شود.
+    """
+    def run(args):
+        try:
+            out = subprocess.run(args, capture_output=True, text=True, timeout=4)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return out.stdout or ""
+
+    iface = via = gw_mac = ""
+    text = run(["ip", "-o", "route", "show", "default"])
+    m = re.search(r"\bdev\s+(\S+)", text)
+    if m:
+        iface = m.group(1)
+    m = re.search(r"\bvia\s+(\d+\.\d+\.\d+\.\d+)", text)
+    if m:
+        via = m.group(1)
+    if not iface and os.path.isdir("/sys/class/net"):
+        # fallback: اولین اینترفیس up به‌جز lo
+        for d in sorted(os.listdir("/sys/class/net")):
+            if d == "lo":
+                continue
+            try:
+                with open(f"/sys/class/net/{d}/operstate", encoding="ascii") as f:
+                    if f.read().strip() == "up":
+                        iface = d
+                        break
+            except OSError:
+                continue
+    if via:
+        for line in run(["ip", "neigh", "show", via]).splitlines():
+            m = re.search(r"\blladdr\s+([0-9a-fA-F:]{17})", line)
+            if m and schema.MAC_RE.match(m.group(1)):
+                gw_mac = m.group(1).lower()
+                break
+    return iface, gw_mac, via
+
+
+def starter_config(role="server", api_bind="127.0.0.1:9090", token=None,
+                   iface=None, gw_mac=None):
+    """کانفیگ اولیه‌ی قابل‌لود برای یک نود تازه.
+
+    از example/ همان ریپو ساخته می‌شود، پس loader آن را می‌پذیرد و نود بالا
+    می‌آید تا پنل بتواند از راه API کانفیگ واقعی را PUT کند. این کانفیگ
+    ترافیک معناداری حمل نمی‌کند (IPهای documentation-class و توکن پیش‌فرض
+    در example): pool/peer/gateway را پنل در ویزارد جفت کانفیگ کامل می‌کند.
+    """
+    cfg = load_example(role)
+    cfg.setdefault("api", {})
+    cfg["api"]["bind"] = api_bind
+    cfg["api"]["token"] = token or gen_token()
+    for itf in cfg.get("interfaces") or []:
+        if iface:
+            itf.setdefault("incoming", {})["name"] = iface
+            out = itf.setdefault("outgoing", {})
+            out["name"] = iface
+            gw = out.get("gateway")
+            if gw_mac and schema.MAC_RE.match(gw_mac):
+                (gw if isinstance(gw, dict) else out.setdefault("gateway", {}))["mac_address"] = gw_mac
+            elif isinstance(gw, dict) and "gateway" in out:
+                del out["gateway"]    # MAC نمونه‌ی ریپو روی VPS واقعی اشتباه است
+        # logger را روی console می‌گذاریم تا systemd journal پر شود
+    cfg["logger"] = {"level": "info", "driver": "console", "console": True,
+                     "async": True,
+                     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}
+    return cfg
+
+
+# ======================================================================
+#  CLI — همان توابعی که UI صدا می‌زند، از shell هم قابل‌استفاده
+# ======================================================================
+
+def _cli(argv=None):
+    import argparse
+    import sys
+
+    try:  # کنسول ویندوز با cp1252 متن فارسی خروجی را چاپ نمی‌کند
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+    p = argparse.ArgumentParser(prog="gen.py",
+                                description="تولید کانفیگ/فایروال injspoof")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("starter", help="کانفیگ اولیه‌ی نود")
+    s.add_argument("--role", default="server", choices=["server", "client"])
+    s.add_argument("--api-bind", default="127.0.0.1:9090")
+    s.add_argument("--token", default=None)
+    s.add_argument("--iface", default=None)
+    s.add_argument("--gw-mac", default=None)
+    s.add_argument("--auto-detect", action="store_true",
+                   help="نام کارت و MAC gateway را از ماشین بگیر (linux)")
+    s.add_argument("--out", default=None)
+
+    f = sub.add_parser("firewall", help="اسکریپت nftables از روی یک کانفیگ")
+    f.add_argument("--config", required=True)
+    f.add_argument("--role", default="server", choices=["server", "client"])
+    f.add_argument("--instance", default=None)
+    f.add_argument("--engine", default="nft", choices=["nft", "iptables"])
+    f.add_argument("--out", default=None)
+
+    sub.add_parser("detect", help="اینترفیس پیش‌فرض و MAC gateway را چاپ کن")
+
+    a = p.parse_args(argv)
+    if a.cmd == "detect":
+        iface, gw, via = detect_wan()
+        print(f"IFACE={iface}\nGW_MAC={gw}\nVIA={via}")
+        return 0
+
+    if a.cmd == "starter":
+        iface, gw = a.iface, a.gw_mac
+        if a.auto_detect:
+            d_iface, d_gw, _via = detect_wan()
+            iface = iface or d_iface
+            gw = gw or d_gw
+        cfg = starter_config(a.role, a.api_bind, a.token, iface, gw)
+        text = json.dumps(cfg, indent=2, ensure_ascii=False) + "\n"
+        if a.out:
+            with open(a.out, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        else:
+            print(text, end="")
+        return 0
+
+    if a.cmd == "firewall":
+        with open(a.config, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        name = a.instance or os.path.splitext(os.path.basename(a.config))[0]
+        if a.engine == "nft":
+            text = nftables_script(cfg, name, instance=a.instance or name)
+        else:
+            text = iptables_script(cfg, name)
+        if a.out:
+            with open(a.out, "w", encoding="utf-8") as fh:
+                fh.write(text)
+                os.chmod(a.out, 0o644)
+        else:
+            print(text, end="")
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())
+

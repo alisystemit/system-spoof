@@ -1,0 +1,238 @@
+#!/bin/sh
+# ====================================================================
+#  injspoof-nodectl — دستیار ریشه‌پای کنترل هسته، از سمت پنل
+#
+#  پنل با کاربر بی‌اختیار injspoof-panel اجرا می‌شود و خودroot نیست. این
+#  اسکریپت از راه sudoers (NOPASSWD، فقط همان کاربر، فقط همین مسیر) چند کار
+#  محدود را ممکن می‌کند تا هسته واقعاً از داخل پنل نصب و راه‌اندازی شود:
+#
+#    status|start|stop|restart [instance]  کنترل واحد systemd هسته
+#    info                                 نسخه، مسیرها، capabilityها، وضعیت سرویس
+#    logs [n] [instance]                  خروجی journalctl (فقط خواندنی)
+#    rescan [instance]                    daemon-reload + status
+#    config-show [instance]               متن کانفیگ روی دیسک
+#    config-write [instance]              نوشتن کانفیگ از stdin (+ بکاپ history)
+#    firewall-apply [instance]            اعمال اسکریپت فایروال از stdin
+#    update                               git pull + install.sh --update
+#
+#  مرزهای امنیت (همین‌ها دلیل وجود این فایل‌اند):
+#    * نام واحد هرگز از پنل نمی‌آید؛ واحد همیشه injspoof@<instance> است.
+#    * instance باید هم الگوی [A-Za-z0-9_.@-] را رد کند، هم در
+#      /etc/injspoof/instances.cfg باشد، هم wrapper و EnvironmentFile و
+#      کانفیگش روی دیسک باشد. پس نمی‌توان واحد دل‌خواهی را restart کرد.
+#    * firewall-apply فقط متنِ تولیدشده‌ی خود پنل را می‌پذیرد (تیتُر
+#      «injspoof kernel-response blocker» و خطوط فقط از نوع nft/iptables/
+#      کامنت/echo) و همان را در /etc/injspoof/firewall/<instance>.nft.sh
+#      ذخیره می‌کند تا با هر restart هسته دوباره اعمال شود.
+#    * update فقط مسیر SRC_DIR ثبت‌شده در /etc/injspoof-panel/state.conf را
+#      اجرا می‌کند و هیچ آرگومانی از پنل نمی‌گیرد. به‌طور پیش‌فرض خاموش است:
+#      باید با --allow-update نصب شده باشد (فایل /etc/injspoof/allow-update).
+#
+#  نصب: /usr/local/libexec/injspoof-nodectl   root:injspoof-panel 0750
+#       + /etc/sudoers.d/injspoof-panel
+# ====================================================================
+
+set -eu
+
+STATE=/etc/injspoof-panel/state.conf
+INSTANCES=/etc/injspoof/instances.cfg
+BIN=/usr/local/bin/injspoof
+BUILD_INFO=/etc/injspoof/build-info
+FW_DIR=/etc/injspoof/firewall
+UNIT=injspoof
+
+die() { printf 'nodectl: %s\n' "$1" >&2; exit 2; }
+
+# فقط مقدار یک کلید را از state برمی‌گرداند؛ state فایل eval نمی‌شود.
+read_state() {
+  [ -r "$STATE" ] || return 0
+  sed -n "s|^$1=||p" "$STATE" | head -1
+}
+
+PREFIX=$(read_state PREFIX)
+[ -n "$PREFIX" ] || PREFIX=/opt/injspoof-panel
+SRC_DIR=$(read_state SRC_DIR)
+# گروه کانفیگ همان کاربر سرویس است؛ install.sh آن را در state می‌نویسد تا
+# --user=custom group را هم درست کند.
+SERVICE_USER=$(read_state SERVICE_USER)
+[ -n "$SERVICE_USER" ] || SERVICE_USER=injspoof-panel
+
+default_instance() {
+  [ -r "$INSTANCES" ] || return 0
+  sed -n '1p' "$INSTANCES"
+}
+
+# instance را اعتبارسنجی می‌کند؛ مسیر کانفیگ در CFG_PATH و پیام خطا در
+# ERR_MSG می‌نشیند. بیرون نمی‌زند تا حالت info بتواند گزارش بدهد.
+check_instance() {
+  _want=${1:-}
+  ERR_MSG=
+  CFG_PATH=
+  case "$_want" in
+    ''|*[!A-Za-z0-9_.@-]*) ERR_MSG="نام instance نامعتبر: '$_want'"; return 1 ;;
+  esac
+  if [ ! -r "$INSTANCES" ]; then
+    ERR_MSG="$INSTANCES نیست؛ هسته نصب نشده است"; return 1
+  fi
+  if ! grep -q -x -- "$_want" "$INSTANCES"; then
+    ERR_MSG="instance «$_want» در $INSTANCES ثبت نشده"; return 1
+  fi
+  if [ ! -f "/etc/injspoof/wrapper/$_want.sh" ]; then
+    ERR_MSG="wrapper برای «$_want» نیست"; return 1
+  fi
+  if [ ! -f "/etc/injspoof/$_want.conf" ]; then
+    ERR_MSG="فایل محیطی «$_want.conf» نیست"; return 1
+  fi
+  CFG_PATH=$(sed -n 's|^INJSPOOF_CONFIG=||p' "/etc/injspoof/$_want.conf" | head -1)
+  if [ -z "$CFG_PATH" ] || [ ! -f "$CFG_PATH" ]; then
+    ERR_MSG="کانفیگ «$_want» روی دیسک نیست ($CFG_PATH)"; return 1
+  fi
+  return 0
+}
+
+require_instance() {
+  check_instance "$1" || die "${ERR_MSG:-instance نامعتبر}"
+}
+
+resolve_instance() {
+  _i=${1:-}
+  [ -n "$_i" ] || _i=$(default_instance)
+  [ -n "$_i" ] || die "هیچ instance‌ای ثبت نشده؛ اول هسته را نصب کنید"
+  printf '%s' "$_i"
+}
+
+cmd=${1:-help}
+if [ $# -gt 0 ]; then shift; fi
+
+case "$cmd" in
+  # --------------------------------------------------- کنترل سرویس هسته
+  start|stop|restart|status)
+    inst=$(resolve_instance "${1:-}")
+    require_instance "$inst"
+    systemctl "$cmd" -- "$UNIT@$inst"
+    ;;
+
+  # --------------------------------------------------- وضعیت نصب
+  info)
+    # instance از پنل می‌آید (نود انتخاب‌شده)؛ اگر نداد، اولین ثبت‌شده.
+    inst=$(resolve_instance "${1:-}")
+    printf 'INSTANCE=%s\n' "$inst"
+    printf 'UNIT=%s\n' "$UNIT@$inst"
+    printf 'PREFIX=%s\n' "$PREFIX"
+    printf 'SRC_DIR=%s\n' "$SRC_DIR"
+    printf 'CFG_GROUP=%s\n' "$SERVICE_USER"
+    printf 'ALL_INSTANCES=%s\n' "$(tr '\n' ',' < "$INSTANCES" 2>/dev/null | sed 's/,$//')"
+    if [ -n "$inst" ] && check_instance "$inst"; then
+      printf 'CONFIG_PATH=%s\n' "$CFG_PATH"
+    else
+      printf 'CONFIG_ERROR=%s\n' "${ERR_MSG:-هیچ instance‌ای ثبت نشده}"
+    fi
+    if [ -x "$BIN" ]; then
+      printf 'BINARY=%s\n' "$BIN"
+      printf 'BINARY_LS=%s\n' "$(ls -l "$BIN" 2>/dev/null | tr -s ' ')"
+      printf 'BINARY_CAPS=%s\n' "$(getcap "$BIN" 2>/dev/null)"
+      printf 'BUILD_INFO=%s\n' "$(tr '\n' ' ' < "$BUILD_INFO" 2>/dev/null)"
+    else
+      printf 'BINARY=missing\n'
+    fi
+    printf 'SERVICE_STATE=%s\n' "$(systemctl is-active "$UNIT@$inst" 2>/dev/null || echo inactive)"
+    printf 'FIREWALL_STATE=%s\n' "$(systemctl is-active "injspoof-firewall@$inst" 2>/dev/null || echo inactive)"
+    printf 'FIREWALL_SCRIPT=%s\n' \
+      "$([ -f "$FW_DIR/$inst.nft.sh" ] && echo present || echo absent)"
+    printf 'UPDATE_ALLOWED=%s\n' "$([ -f /etc/injspoof/allow-update ] && echo yes || echo no)"
+    ;;
+
+  version)
+    [ -x "$BIN" ] || die "باینری $BIN نصب نیست"
+    printf '%s\n' "$BIN"
+    [ -r "$BUILD_INFO" ] || die "$BUILD_INFO نیست؛ هسته را با install.sh نصب کنید"
+    tr '\n' ' ' < "$BUILD_INFO"
+    printf '\n'
+    ;;
+
+  logs)
+    n=${1:-80}
+    case "$n" in ''|*[!0-9]*) n=80 ;; esac
+    [ "$n" -gt 500 ] && n=500
+    inst=$(resolve_instance "${2:-}")
+    journalctl -q --no-pager -o short-iso -n "$n" \
+      -u "$UNIT@$inst" -u "injspoof-firewall@$inst" 2>&1 | tail -n "$n"
+    ;;
+
+  # --------------------------------------------------- daemon-reload
+  rescan)
+    inst=$(resolve_instance "${1:-}")
+    require_instance "$inst"
+    systemctl daemon-reload
+    systemctl --no-pager status -- "$UNIT@$inst" 2>&1 | sed -n '1,12p'
+    ;;
+
+  # --------------------------------------------------- کانفیگ روی دیسک
+  # PUT /api/v1/config فقط وقتی کار می‌کند که هسته بالا باشد. برای نخستین
+  # راه‌اندازی (کانفیگ تازه از ویزارد) همین مسیر لازم است: پنل متن را
+  # اعتبارسنجی کرده، اینجا نوشته و بکاپ گرفته می‌شود.
+  config-show)
+    inst=$(resolve_instance "${1:-}")
+    require_instance "$inst"
+    cat -- "$CFG_PATH"
+    ;;
+
+  config-write)
+    inst=$(resolve_instance "${1:-}")
+    require_instance "$inst"
+    tmp=$(mktemp) || die "mktemp نشد"
+    chmod 600 "$tmp"
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    cat > "$tmp"
+    [ -s "$tmp" ] || die "متن کانفیگ خالی است"
+    [ "$(wc -c < "$tmp")" -le 1048576 ] || die "کانفیگ بیش از حد بزرگ است"
+    head -c 1 "$tmp" | grep -q '{' || die "کانفیگ با { شروع نمی‌شود؛ JSON نیست"
+    install -d -m 0755 /etc/injspoof/history
+    if [ -f "$CFG_PATH" ]; then
+      install -m 0640 "$CFG_PATH" \
+        "/etc/injspoof/history/$inst-$(date -u +%Y%m%dT%H%M%SZ).json" || true
+    fi
+    install -m 0640 -g "$SERVICE_USER" "$tmp" "$CFG_PATH"
+    printf 'injspoof-nodectl: کانفیگ در %s نوشته شد\n' "$CFG_PATH"
+    ;;
+
+  # --------------------------------------------------- اعمال فایروال
+  firewall-apply)
+    inst=$(resolve_instance "${1:-}")
+    require_instance "$inst"
+    tmp=$(mktemp) || die "mktemp نشد"
+    chmod 600 "$tmp"
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    cat > "$tmp"
+    [ -s "$tmp" ] || die "متن اسکریپت فایروال خالی است"
+    [ "$(wc -c < "$tmp")" -le 65536 ] || die "اسکریپت بیش از حد بزرگ است"
+    grep -q 'injspoof kernel-response blocker' "$tmp" ||
+      die "متن ارسالی اسکریپت فایروال تولیدشده‌ی پنل نیست"
+    bad=$(grep -vE '^[[:space:]]*(#|set -eu|nft |iptables |echo |$)' "$tmp" | head -3 || true)
+    [ -z "$bad" ] || die "خطوط غیرمجاز در اسکریپت: $bad"
+    bash "$tmp"
+    install -d -m 0755 "$FW_DIR"
+    install -m 0644 "$tmp" "$FW_DIR/$inst.nft.sh"
+    printf 'injspoof-nodectl: قواعد فایروال اعمال و در %s/%s.nft.sh ذخیره شد\n' \
+      "$FW_DIR" "$inst"
+    ;;
+
+  # --------------------------------------------------- به‌روزرسانی
+  update)
+    [ -f /etc/injspoof/allow-update ] ||
+      die "به‌روزرسانی از پنل خاموش است (با --allow-update نصب کنید)"
+    [ -n "$SRC_DIR" ] || die "SRC_DIR در $STATE ثبت نشده"
+    [ -d "$SRC_DIR/.git" ] || die "$SRC_DIR ریپوی git نیست"
+    cd "$SRC_DIR"
+    git pull --ff-only || die "git pull شکست (تعارض محلی؟)"
+    bash panel/install.sh --update || die "install.sh --update شکست"
+    ;;
+
+  help)
+    sed -n '2,32p' "$0"
+    ;;
+
+  *)
+    die "دستور ناشناخته: $cmd (کمک: injspoof-nodectl help)"
+    ;;
+esac

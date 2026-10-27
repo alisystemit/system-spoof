@@ -22,7 +22,11 @@
   {% for n in nodes %}
     {% set st = status.get(n.id, {}) %}
     <tr data-node="{{ n.id }}">
-      <td><b>{{ n.name }}</b>{% if n.note %}<div class="muted small">{{ n.note }}</div>{% endif %}</td>
+      <td><b>{{ n.name }}</b>
+        {% if n.is_local %}<span class="chip chip-ok">محلی</span>{% endif %}
+        {% if n.note %}<div class="muted small">{{ n.note }}</div>{% endif %}
+        {% if n.is_local %}<div class="muted small mono" dir="ltr">injspoof@{{ n.core_instance or '…' }}</div>{% endif %}
+      </td>
       <td><span class="chip chip-{{ n.role }}">{{ 'کلاینت' if n.role == 'client' else 'سرور' }}</span></td>
       <td><code>{{ n.api_url }}</code></td>
       <td>{% if n.api_token %}<span class="ok-dot">✓</span>{% else %}<span class="bad-dot">بدون توکن</span>{% endif %}</td>
@@ -35,6 +39,9 @@
       <td class="live-cell" data-live="pps">—</td>
       <td class="row-actions">
         <button class="btn btn-sm" data-act="test">تست اتصال</button>
+        {% if n.is_local %}
+        <a class="btn btn-sm btn-ghost" href="{{ url_for('core_page', node=n.id) }}">هسته</a>
+        {% endif %}
         <a class="btn btn-sm" href="{{ url_for('editor_page', node=n.id) }}">کانفیگ</a>
         <a class="btn btn-sm" href="{{ url_for('history_page', node_id=n.id) }}">تاریخچه</a>
         <a class="btn btn-sm btn-ghost" href="{{ url_for('node_form', node_id=n.id) }}">ویرایش</a>
@@ -62,6 +69,9 @@
     <code>POST /api/v1/reload</code> اجازه‌ی تغییر کانفیگ می‌دهد. اگر <code>api.bind</code>
     را روی <code>0.0.0.0</code> گذاشته باشید، هر کسی که توکن را داشته باشد کانفیگ شبکه‌ی شما
     را عوض می‌کند. پیش‌فرض امن: <code>127.0.0.1:9090</code>.</p>
+  <p class="hint">نودی که برچسب <b>محلی</b> دارد روی همین ماشین نصب است و از صفحه‌ی
+    <a href="{{ url_for('core_page') }}">هسته</a> سرویسش با systemd کنترل می‌شود؛ بقیه‌ی
+    نودها فقط از راه API همان سرور مدیریت می‌شوند.</p>
 </section>
 {% endblock %}
 {% block scripts %}<script>PB.nodes.init();</script>{% endblock %}

@@ -1,4 +1,47 @@
 /* style.css — پنل injspoof | فارسی RTL، تم روشن */
+
+/* ---------- فونت ----------
+   Vazirmatn نسخه‌ی 33.003 و JetBrains Mono (هر دو SIL Open Font License 1.1)
+   خودمیزبان‌اند: فایل‌ها در panel/static/fonts/ هستند و هیچ درخواستی به CDN یا
+   اینترنت زده نمی‌شود؛ نصب روی سرور آفلاین هم همین شش فایل را می‌برد.
+   مجوزها: static/fonts/OFL.txt و static/fonts/OFL-JetBrainsMono.txt
+   چهار وزن Vazirmatn دقیقاً همان‌هایی‌اند که این stylesheet استفاده می‌کند (400/500/600/700). */
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("fonts/Vazirmatn-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("fonts/Vazirmatn-Medium.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("fonts/Vazirmatn-SemiBold.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("fonts/Vazirmatn-Bold.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+/* JetBrains Mono (SIL OFL 1.1) — فقط وزن‌های 400 و 700، زیرمجموعه‌ی ASCII تا
+   هر فایل ~۵KB بماند. کارکتهای فارسی داخل بلوک کد به Vazirmatn برمی‌گردند. */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2010-2027, U+2190-2193, U+2713-2717;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Bold.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2010-2027, U+2190-2193, U+2713-2717;
+}
+
 :root {
   --bg: #f4f6fb;
   --surface: #ffffff;
@@ -18,7 +61,8 @@
   --info-soft: #e8f4fa;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(28, 36, 52, .06), 0 4px 14px rgba(28, 36, 52, .05);
-  --mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --sans: "Vazirmatn", "Segoe UI", Tahoma, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, "Vazirmatn", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -28,7 +72,7 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Vazirmatn", "Estedad", Tahoma, "Segoe UI", sans-serif;
+  font-family: var(--sans);
   font-size: 14px;
   line-height: 1.7;
 }
@@ -290,6 +334,10 @@ label > .input, label > textarea { margin-top: 4px; }
           font-family: var(--mono); direction: ltr; text-align: left; white-space: pre-wrap; }
 .result.is-bad { background: var(--err-soft); border-color: #f3c8c4; }
 .result.is-ok { background: var(--ok-soft); border-color: #c7e8d7; }
+/* لاگ journalctl و خروجی helper بلندند؛ ارتفاع را محدود کن تا صفحه پرش نکند */
+.result { max-height: 460px; overflow: auto; }
+/* ستون‌های دو-tایی: یک panel بلند نباید ستون بغل را بکشد */
+.two-col > section { min-width: 0; overflow: hidden; }
 .rules { margin: 0; padding-inline-start: 18px; font-size: 12.5px; }
 .rules li { margin-bottom: 7px; }
 .rules .src { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted);

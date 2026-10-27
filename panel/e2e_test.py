@@ -329,6 +329,41 @@ def main():
               any("port.src" in i["path"] for i in lc_errs),
               f"{str(livecheck)[:120]} | errs={[i['path'] for i in lc_errs]}")
 
+    # ---------- صفحه‌ی «هسته» و مرز نود محلی/دوردست ----------
+    # نودهای این تست روی همان ماشین ولی با API هستند و is_local ندارند؛ پس
+    # پنل باید هر درخواست سرویس را رد کند (helper فقط instanceهای ثبت‌شده را
+    # می‌شناسد و پنل اصلاً نباید آن‌قدر جلو برود).
+    st, html = req("/core", raw=True)
+    check("core page renders", st == 200 and 'id="core"' in html, f"status={st}")
+    st, cinfo = req("/api/core/info")
+    check("core info answers with no node selected",
+          st == 200 and "controllable" in cinfo and cinfo.get("node") is None,
+          f"status={st} {str(cinfo)[:160]}")
+    st, svc = req("/api/core/service", {"action": "restart", "node_id": srv["id"]})
+    check("service control refuses a non-local node",
+          st == 400 and not svc.get("ok") and "محلی" in (svc.get("error") or ""),
+          f"status={st} {str(svc)[:160]}")
+    st, cw = req("/api/core/config/write",
+                 {"node_id": srv["id"], "config": json.dumps(good), "restart": False})
+    check("disk config write refuses a non-local node",
+          st == 400 and not cw.get("ok"), f"status={st} {str(cw)[:160]}")
+    st, fws = req(f"/api/core/firewall/script?node={srv['id']}&engine=nft")
+    check("firewall script is generated for a remote node too",
+          st == 200 and fws.get("ok") and "add table inet injspoof" in fws.get("script", ""),
+          f"status={st} {str(fws)[:160]}")
+
+    # تیک «محلی» با instance نامعتبر باید در همان فرم رد شود، نه در helper
+    form("/nodes/new", {"name": "e2e-badlocal", "role": "server",
+                        "api_url": "http://127.0.0.1:9090", "api_token": "devtoken",
+                        "enabled": "1", "is_local": "1", "core_instance": "bad name/;"})
+    check("local node with an invalid instance name is refused",
+          "e2e-badlocal" not in nodes_by_name(), "row was written anyway")
+
+    by_name = nodes_by_name()
+    for key in ("e2e-badlocal",):
+        if key in by_name:
+            form(f"/nodes/{by_name[key]['id']}/delete", {})
+
     report()
     return 1 if FAILED else 0
 

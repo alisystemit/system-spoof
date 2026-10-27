@@ -1,10 +1,12 @@
 """
 db.py — ذخیره‌سازی محلی پنل روی SQLite (stdlib، بدون سرویس دیتابیس)
 
-سه جدول:
+چهار جدول:
   nodes            نودهای injspoof که پنل مدیریت می‌کند (url + token)
-  pairs          spec های تولید کانفیگ دوطرفه
-  config_history  هر نسخه‌ی کانفیگی که روی نود اعمال شده، برای rollback
+                   نود «محلی» پرچم is_local و نام instance هسته را هم دارد
+  pairs            specهای تولید کانفیگ دوطرفه
+  config_history   هر نسخه‌ی کانفیگی که روی نود اعمال شده، برای rollback
+  settings         کلید/مقدار ساده
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     api_token   TEXT NOT NULL DEFAULT '',
     enabled     INTEGER NOT NULL DEFAULT 1,
     config_path TEXT NOT NULL DEFAULT '',
+    is_local    INTEGER NOT NULL DEFAULT 0,
+    core_instance TEXT NOT NULL DEFAULT '',
     note        TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
@@ -86,6 +90,22 @@ def tx():
 def init():
     with tx() as conn:
         conn.executescript(SCHEMA_SQL)
+        migrate(conn)
+
+
+# دیتابیس‌های قدیمی‌تر این ستون‌ها را ندارند؛ CREATE TABLE IF NOT EXISTS روی
+# جدول موجود ستون تازه نمی‌سازد، پس ALTER TABLE را دستی و بی‌خطا اجرا می‌کنیم.
+_NEW_NODE_COLUMNS = {
+    "is_local": "INTEGER NOT NULL DEFAULT 0",
+    "core_instance": "TEXT NOT NULL DEFAULT ''",
+}
+
+
+def migrate(conn):
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(nodes)").fetchall()}
+    for name, decl in _NEW_NODE_COLUMNS.items():
+        if name not in cols:
+            conn.execute("ALTER TABLE nodes ADD COLUMN %s %s" % (name, decl))
 
 
 def get_setting(conn, key, default=None):
@@ -105,8 +125,9 @@ def set_setting(conn, key, value):
 # ======================================================================
 
 def list_nodes(conn):
+    # نود محلی اول می‌آید: صفحه‌های «هسته» و پیش‌فرض‌های سرویس با آن کار می‌کنند.
     return [dict(r) for r in conn.execute(
-        "SELECT * FROM nodes ORDER BY name COLLATE NOCASE").fetchall()]
+        "SELECT * FROM nodes ORDER BY is_local DESC, name COLLATE NOCASE").fetchall()]
 
 
 def get_node(conn, node_id):
@@ -114,21 +135,32 @@ def get_node(conn, node_id):
     return dict(row) if row else None
 
 
+def get_node_by_name(conn, name):
+    """برای register.py: نصب دوباره نباید نود محلی را duplicate کند."""
+    row = conn.execute("SELECT * FROM nodes WHERE name = ?", (name,)).fetchone()
+    return dict(row) if row else None
+
+
 def upsert_node(conn, node):
+    # is_local / core_instance هسته‌ی این ماشین را از بقیه جدا می‌کند؛ بدون
+    # نوشتنشان، فرم نود هیچ‌وقت کنترل سرویس را فعال نمی‌کند.
+    local = int(bool(node.get("is_local")))
+    inst = (node.get("core_instance") or "").strip()
     if node.get("id"):
         conn.execute(
             "UPDATE nodes SET name=?, role=?, api_url=?, api_token=?, enabled=?, "
-            "config_path=?, note=?, updated_at=datetime('now') WHERE id=?",
+            "config_path=?, is_local=?, core_instance=?, note=?, "
+            "updated_at=datetime('now') WHERE id=?",
             (node["name"], node["role"], node["api_url"], node.get("api_token", ""),
              int(bool(node.get("enabled", True))), node.get("config_path", ""),
-             node.get("note", ""), node["id"]))
+             local, inst, node.get("note", ""), node["id"]))
         return node["id"]
     cur = conn.execute(
-        "INSERT INTO nodes(name, role, api_url, api_token, enabled, config_path, note) "
-        "VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO nodes(name, role, api_url, api_token, enabled, config_path, "
+        "is_local, core_instance, note) VALUES(?,?,?,?,?,?,?,?,?)",
         (node["name"], node["role"], node["api_url"], node.get("api_token", ""),
          int(bool(node.get("enabled", True))), node.get("config_path", ""),
-         node.get("note", "")))
+         local, inst, node.get("note", "")))
     return cur.lastrowid
 
 

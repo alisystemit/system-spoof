@@ -49,3 +49,9 @@ dashboard/dashboard.db
 
 # Old/forked tree kept locally for reference only.
 injspoof-old/
+
+# پنل: وضعیت شبیه‌ساز helper و دیتابیس محلی (توکن دارند)
+panel/.mock-nodectl/
+panel/panel.db
+panel/panel.db-journal
+__pycache__/

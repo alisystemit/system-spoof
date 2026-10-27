@@ -256,10 +256,11 @@ def main():
             STATE["config"] = json.load(f)
     elif args.load_example:
         name = "server" if args.mode == "server" else "client"
-        # مسیر را مستقل از cwd پیدا کن: هم از پوشه‌ی فعلی و هم از ریشه‌ی ریپو.
+        # مسیر را مستقل از cwd پیدا کن: example/ ریپو وگرنه seed/ خودِ پنل.
         here = os.path.dirname(os.path.abspath(__file__))
         candidates = [os.path.join("example", f"{name}.json"),
-                      os.path.join(here, "..", "example", f"{name}.json")]
+                      os.path.join(here, "..", "example", f"{name}.json"),
+                      os.path.join(here, "seed", f"{name}.json")]
         path = next((c for c in candidates if os.path.exists(c)), candidates[-1])
         STATE["config_path"] = path
         STATE["config"] = json.loads(open(path, encoding="utf-8").read())

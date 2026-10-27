@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}هسته — پنل injspoof{% endblock %}
+{% block body %}
+<div id="core" data-node="{{ node.id if node else '' }}">
+  <header class="page-head">
+    <div>
+      <h1>هسته روی همین ماشین</h1>
+      <p class="muted">سرویس، کانفیگ دیسک، قواعد فایروال و به‌روزرسانی از راه
+        helper ریشه‌پای <code>/usr/local/libexec/injspoof-nodectl</code> انجام می‌شود.
+        پنل root نیست و فقط instanceهایی را می‌پذیرد که در
+        <code>/etc/injspoof/instances.cfg</code> ثبت شده‌اند.</p>
+    </div>
+    <div class="node-picker">
+      {% if nodes %}
+      <select id="core-node" class="input">
+        {% for n in nodes %}
+        <option value="{{ n.id }}" {{ 'selected' if node and n.id == node.id }}>
+          {{ n.name }} — {{ 'کلاینت' if n.role == 'client' else 'سرور' }}
+        </option>
+        {% endfor %}
+      </select>
+      {% elif controllable %}
+      <a class="btn btn-primary" href="{{ url_for('node_form') }}">نود محلی را ثبت کنید</a>
+      {% endif %}
+    </div>
+  </header>
+
+  {% if not controllable %}
+  <div class="empty">
+    <p>کنترل هسته از پنل روی این ماشین غیرفعال است.</p>
+    <p class="muted">پنل برای این کار به دو چیز نیاز دارد:
+      <b>sudo</b> و helper ریشه‌پای <code>{{ state.helper if state.helper else
+      '/usr/local/libexec/injspoof-nodectl' }}</code> که
+      <code>panel/install.sh</code> هر دو را می‌چیند. تا آن‌ها نباشند، پنل فقط از راه
+      <code>api.bind</code> با نود حرف می‌زند و داشبورد/ویرایشگر کامل کار می‌کند.</p>
+    <pre class="code">git clone https://github.com/alisystemit/system-spoof.git
+cd system-spoof &amp;&amp; sudo bash panel/install.sh</pre>
+    {% if state.raw %}<div id="helper-error" class="result is-bad">{{ state.raw }}</div>{% endif %}
+  </div>
+
+  {% else %}
+  <section class="stat-grid">
+    <div class="stat {{ 'is-ok' if installed else 'is-bad' }}">
+      <span class="stat-label">باینری هسته</span>
+      <b class="stat-value">{{ 'نصب است' if installed else 'نصب نیست' }}</b>
+      <small class="muted mono" dir="ltr">{{ state.BINARY or '—' }}</small>
+    </div>
+    <div class="stat {{ 'is-ok' if service == 'active' else '' }}">
+      <span class="stat-label">سرویس {{ state.UNIT or '—' }}</span>
+      <b class="stat-value" id="k-service">{{ service }}</b>
+      <small class="muted">واحد <code>injspoof@{{ instance or '…' }}</code></small>
+    </div>
+    <div class="stat">
+      <span class="stat-label">واحد فایروال</span>
+      <b class="stat-value">{{ firewall_service }}</b>
+      <small class="muted">اسکریپت: {{ state.FIREWALL_SCRIPT or '—' }}</small>
+    </div>
+    <div class="stat {{ 'is-ok' if api_alive else 'is-bad' }}">
+      <span class="stat-label">API نود</span>
+      <b class="stat-value" id="k-api">{{ 'زنده' if api_alive else ('قطع' if api_alive is sameas false else '—') }}</b>
+      <small class="muted" id="k-api-sub">{{ api_error or (node.api_url if node else '') }}</small>
+    </div>
+    <div class="stat {{ 'is-bad' if config_error or summary.error else ('is-ok' if config_path) }}">
+      <span class="stat-label">کانفیگ روی دیسک</span>
+      <b class="stat-value">{{ summary.error }} خطا</b>
+      <small class="muted" dir="ltr">{{ config_path or config_error or '—' }}</small>
+    </div>
+    <div class="stat">
+      <span class="stat-label">به‌روزرسانی از پنل</span>
+      <b class="stat-value">{{ 'مجاز' if update_allowed else 'خاموش' }}</b>
+      <small class="muted">{{ build_info or 'بدون build-info' }}</small>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>جزئیات نصب</h2>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="btn-refresh">تازه‌سازی وضعیت</button></div>
+    <table class="tbl">
+      <tbody>
+        <tr><th>instanceها</th><td class="mono" dir="ltr">{{ state.ALL_INSTANCES or '—' }}</td></tr>
+        <tr><th>واحد</th><td class="mono" dir="ltr">{{ state.UNIT or '—' }}</td></tr>
+        <tr><th>باینری</th><td class="mono small" dir="ltr">{{ state.BINARY_LS or '—' }}</td></tr>
+        <tr><th>capability</th><td class="mono small" dir="ltr">{{ binary_caps or 'ست نشده' }}</td></tr>
+        <tr><th>نسخه‌ی build</th><td class="mono small" dir="ltr">{{ build_info or '—' }}</td></tr>
+        <tr><th>کانفیگ</th><td class="mono" dir="ltr">{{ config_path or config_error or '—' }}</td></tr>
+        <tr><th>مسیر ریپو</th><td class="mono" dir="ltr">{{ state.SRC_DIR or '—' }}</td></tr>
+        <tr><th>پنل</th><td class="mono" dir="ltr">{{ state.PREFIX or '—' }}</td></tr>
+        <tr><th>pps زنده</th><td class="mono" dir="ltr" id="k-livepps">—</td></tr>
+      </tbody>
+    </table>
+    {% if not instance %}
+    <p class="hint">برای این نود <code>core_instance</code> خالی است؛ مقدارش را از فرم
+      «ویرایش نود» و دقیقاً مثل نام فایل <code>/etc/injspoof/&lt;instance&gt;.conf</code>
+      پر کنید.</p>
+    {% endif %}
+  </section>
+
+  <div class="two-col">
+    <section class="panel">
+      <div class="panel-head"><h2>سرویس</h2></div>
+      <div class="actions">
+        <button class="btn btn-sm" data-svc="status">وضعیت</button>
+        <button class="btn btn-sm btn-success" data-svc="start">شروع</button>
+        <button class="btn btn-sm" data-svc="stop">توقف</button>
+        <button class="btn btn-sm btn-danger" data-svc="restart">restart</button>
+        <button class="btn btn-sm btn-ghost" id="btn-rescan">daemon-reload</button>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <select class="input input-sm" id="log-lines">
+          <option value="40">40 خط</option>
+          <option value="120" selected>120 خط</option>
+          <option value="300">300 خط</option>
+        </select>
+        <button class="btn btn-sm" id="btn-logs">لاگ journalctl</button>
+        <span class="muted small">لاگ هسته و واحد فایروال هر دو</span>
+      </div>
+      <p class="hint">stop/start هسته تونل را قطع می‌کند. برای تغییر کانفیگ لازم نیست؛
+        hot reload در ویرایشگر کافی است.</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>کانفیگ روی دیسک</h2>
+        <span class="spacer"></span>
+        <span class="chip {{ 'chip-ok' if not summary.error else 'chip-error' }}">
+          {{ summary.error }} خطا · {{ summary.warn }} هشدار</span></div>
+      {% if disk_config %}
+      <div class="actions">
+        <label class="check"><input type="checkbox" id="write-restart" checked>
+          <span>بعد از نوشتن restart شود</span></label>
+        <button class="btn btn-sm btn-primary" id="btn-write-disk">همین کانفیگ را بنویس + restart</button>
+        <button class="btn btn-sm" id="btn-pull-live">کانفیگ زنده‌ی نود را روی دیسک برگردان</button>
+        <button class="btn btn-sm btn-ghost" id="btn-dl-disk">دانلود</button>
+      </div>
+      {% elif config_error %}
+      <p class="bad-dot">{{ config_error }}</p>
+      {% else %}
+      <p class="muted">کانفیگی روی دیسک پیدا نشد.</p>
+      {% endif %}
+      <div id="core-issues" class="issues" style="margin-top:10px"></div>
+      <p class="hint">این مسیر جایگزین <code>PUT /api/v1/config</code> است: آن فقط وقتی
+        کار می‌کند که هسته بالا باشد. اینجا کانفیگ اعتبارسنجی‌شده مستقیم روی دیسک
+        می‌نشیند و نسخه‌ی قبلی در <code>/etc/injspoof/history/</code> و تاریخچه‌ی پنل
+        بکاپ می‌گیرد.</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>قواعد فایروال (بستن RST/ICMP کرنل)</h2></div>
+      <div class="actions">
+        <select class="input input-sm" id="fw-engine">
+          <option value="nft">nftables</option>
+          <option value="iptables">iptables</option>
+        </select>
+        <button class="btn btn-sm" id="btn-fw-preview">پیش‌نمایش</button>
+        <button class="btn btn-sm btn-ghost" id="btn-fw-download">دانلود اسکریپت</button>
+        <button class="btn btn-sm btn-primary" id="btn-fw-apply">اعمال روی این ماشین</button>
+      </div>
+      <pre id="fw-script" class="code hidden" dir="ltr"></pre>
+      <p class="hint">اعمال فقط متنِ تولیدشده‌ی خود پنل را می‌پذیرد و در
+        <code>/etc/injspoof/firewall/{{ instance }}.nft.sh</code> ذخیره می‌شود تا با هر
+        شروعِ هسته دوباره بسته شود. بدون این قواعد، کرنل خودش RST می‌فرستد و تونل
+        می‌شکند.</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>به‌روزرسانی</h2></div>
+      {% if update_allowed %}
+      <div class="actions">
+        <button class="btn btn-sm btn-danger" id="btn-update">git pull + install.sh --update</button>
+      </div>
+      <p class="hint">helper فقط در <code>{{ state.SRC_DIR or '/src/…' }}</code> همان
+        ریپو را pull می‌کند و <code>--ff-only</code>؛ اگر تعارض محلی باشد می‌ایستد.
+        کانفیگ‌های روی دیسک و panel.db دست‌نخورده می‌مانند.</p>
+      {% else %}
+      <p class="muted">به‌روزرسانی از پنل خاموش است. برای روشن کردنش، نصب را با
+        <code>--allow-update</code> تکرار کنید یا فایل <code>/etc/injspoof/allow-update</code>
+        را بسازید.</p>
+      <pre class="code">sudo bash panel/install.sh --update --allow-update</pre>
+      {% endif %}
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head"><h2>خروجی عملیات</h2>
+      <span class="spacer"></span>
+      <span class="muted small">همان متنی که helper روی stdout/stderr نوشته</span></div>
+    <pre id="core-out" class="result hidden"></pre>
+  </section>
+
+  <p class="foot-note muted">کنترل سرویس از این صفحه فقط برای نودهای «محلی» است. نود
+    دوردست را از همان <code>api.bind</code> و با hot reload مدیریت کنید.</p>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script>PB.core.init();</script>{% endblock %}

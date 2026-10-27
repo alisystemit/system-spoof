@@ -47,6 +47,27 @@
            value="{{ node.note if node else '' }}"></label>
 
   <label class="check span2">
+    <input type="checkbox" name="is_local" value="1" id="is-local"
+           {{ 'checked' if node and node.is_local }}>
+    <span>هسته‌ی این نود روی همین ماشین اجرا می‌شود (کنترل سرویس، کانفیگ دیسک،
+      فایروال و لاگ از صفحه‌ی «هسته»)</span>
+  </label>
+
+  <label class="span2" id="instance-field">نام instance در systemd (<code>injspoof@&lt;instance&gt;</code>)
+    <input class="input mono" name="core_instance" id="core-instance" dir="ltr"
+           placeholder="{{ default_instance or 'server' }}"
+           value="{{ node.core_instance if node else '' }}">
+    <small class="muted">
+      {% if core_available %}
+      باید دقیقاً همان نامی باشد که در <code>/etc/injspoof/instances.cfg</code> نوشته
+      شده؛ helper ریشه‌پای جز این‌ها چیزی را نمی‌پذیرد.
+      {% else %}
+      <code>{{ helper_path }}</code> روی این ماشین نیست؛ تا هسته با
+      <code>panel/install.sh</code> نصب نشود، کنترل سرویس از پنل کار نمی‌کند.
+      {% endif %}
+    </small></label>
+
+  <label class="check span2">
     <input type="checkbox" name="enabled" value="1" {{ 'checked' if not node or node.enabled }}>
     <span>نود فعال است (پنل هر {{ interval }} ثانیه شمارنده‌هایش را نمونه‌برداری می‌کند)</span>
   </label>
@@ -68,3 +89,4 @@
 # api.bind -> آدرس API،  api.token -> توکن</pre>
 </section>
 {% endblock %}
+{% block scripts %}<script>PB.nodeForm.init();</script>{% endblock %}

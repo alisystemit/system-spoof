@@ -1,0 +1,24 @@
+# injspoof — واحد oneshot بستن پاسخ‌های کرنل
+#
+# بدون این قواعد، کرنل برای جریان‌های spoofed خودش RST و ICMP error می‌فرستد
+# و تونل reset می‌شود (docs/OPERATIONS.md، Table 1 و Table 2).
+# install.sh اسکریپت nftables را از همان کانفیگ تولید و در
+# /etc/injspoof/firewall/<instance>.nft.sh می‌گذارد (خروجی panel/gen.py).
+# اگر فایل نباشد واحد بی‌کار رد می‌شود و هسته را بلوکه نمی‌کند.
+
+[Unit]
+Description=injspoof kernel-response blocker (%i)
+Documentation=file:/usr/local/share/doc/injspoof/OPERATIONS.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/injspoof/%i.conf
+ExecStart=/bin/sh -c 'if [ -f "/etc/injspoof/firewall/%i.nft.sh" ]; then bash "/etc/injspoof/firewall/%i.nft.sh"; else echo "injspoof-blocker: /etc/injspoof/firewall/%i.nft.sh نیست؛ قواعد kernel-reset بسته نشده (از پنل یا panel/gen.py تولیدش کنید)"; fi'
+# نبودن جدول خطا نیست؛ stop نباید واحد را failed کند.
+ExecStop=/bin/sh -c 'nft delete table inet injspoof 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

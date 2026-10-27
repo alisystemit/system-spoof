@@ -104,6 +104,10 @@
         <button class="btn btn-danger" id="btn-hard">Hard reload (execve)</button>
         <a class="btn" id="link-editor" href="{{ url_for('editor_page') }}">ویرایش کانفیگ این نود</a>
         <a class="btn" id="link-history" href="#">تاریخچه و بازگشت</a>
+        {% set cur = nodes | selectattr('id', 'equalto', selected) | first %}
+        {% if cur and cur.is_local %}
+        <a class="btn btn-ghost" href="{{ url_for('core_page', node=cur.id) }}">سرویس هسته</a>
+        {% endif %}
         <button class="btn btn-ghost" id="btn-refresh">همين حالا نمونه‌برداری</button>
       </div>
       <p class="hint">Hard reload هسته را با <code>execve()</code> جایگزین می‌کند؛ PID حفظ
