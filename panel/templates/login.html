@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}ورود — پنل injspoof{% endblock %}
+{% block body %}
+<div class="login-box">
+  <h1>ورود به پنل</h1>
+  <p class="muted">رمز عبور را با متغیر محیطی <code>PANEL_PASSWORD</code> ست کرده‌اید.</p>
+  <form method="post" class="panel">
+    <label>رمز عبور
+      <input class="input" type="password" name="password" autofocus required></label>
+    <button class="btn btn-primary" type="submit">ورود</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,99 @@
+{
+    "api": {
+        "bind": "127.0.0.1:9091",
+        "token": "CHANGE_ME_use_a_long_random_secret"
+    },
+    "interfaces": [
+        {
+            "tag": "wan",
+            "incoming": {
+                "name": "eth0"
+            },
+            "outgoing": {
+                "name": "eth0",
+                "gateway": {
+                    "mac_address": "00:00:5e:00:53:01"
+                }
+            },
+            "fragment_size": 1400
+        }
+    ],
+    "firewall": [
+        {
+            "tag": "rule-a",
+            "outgoing": {
+                "source": [
+                    {
+                        "type": "static",
+                        "value": [
+                            "198.51.100.0/24"
+                        ]
+                    }
+                ],
+                "port": {
+                    "src": [
+                        3232
+                    ],
+                    "dst": [
+                        443
+                    ]
+                },
+                "protocol": {
+                    "name": "tcp",
+                    "options": {
+                        "flags": "psh+ack"
+                    }
+                }
+            },
+            "incoming": {
+                "source": [
+                    {
+                        "type": "static",
+                        "value": [
+                            "203.0.113.0/24"
+                        ]
+                    }
+                ],
+                "port": {
+                    "src": [
+                        443
+                    ]
+                },
+                "protocol": {
+                    "name": "tcp",
+                    "options": {
+                        "flags": "psh+ack"
+                    }
+                }
+            }
+        }
+    ],
+    "peers": [
+        {
+            "hid": "52sxd",
+            "address": "192.0.2.10",
+            "rule": "rule-a",
+            "interface": "wan",
+            "forwards": [
+                {
+                    "bind": "127.0.0.1:51820",
+                    "redirect": "203.0.113.10:51820"
+                }
+            ]
+        }
+    ],
+    "tuning": {
+        "fastpath": {
+            "mode": "auto",
+            "zero_copy": true,
+            "queues": 0
+        }
+    },
+    "logger": {
+        "level": "info",
+        "driver": "console",
+        "console": true,
+        "async": true,
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    }
+}

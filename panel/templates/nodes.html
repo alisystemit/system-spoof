@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}نودها — پنل injspoof{% endblock %}
+{% block body %}
+<header class="page-head">
+  <div>
+    <h1>نودهای injspoof</h1>
+    <p class="muted">پنل کنار هر نود اجرا می‌شود و به <code>api.bind</code> لوکال‌هاست
+      وصل می‌گردد. توکن‌ها فقط در <code>panel.db</code> می‌مانند و به مرورگر داده نمی‌شوند.</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('node_form') }}">+ نود جدید</a>
+</header>
+
+{% if nodes %}
+<table class="tbl tbl-wide">
+  <thead>
+    <tr>
+      <th>نام</th><th>نقش</th><th>API</th><th>توکن</th>
+      <th>سلامت</th><th>PID / uptime</th><th>pps</th><th>کارها</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for n in nodes %}
+    {% set st = status.get(n.id, {}) %}
+    <tr data-node="{{ n.id }}">
+      <td><b>{{ n.name }}</b>{% if n.note %}<div class="muted small">{{ n.note }}</div>{% endif %}</td>
+      <td><span class="chip chip-{{ n.role }}">{{ 'کلاینت' if n.role == 'client' else 'سرور' }}</span></td>
+      <td><code>{{ n.api_url }}</code></td>
+      <td>{% if n.api_token %}<span class="ok-dot">✓</span>{% else %}<span class="bad-dot">بدون توکن</span>{% endif %}</td>
+      <td>
+        {% if st.get('alive') %}<span class="dot dot-on"></span> زنده
+        {% elif st.get('alive') is none %}<span class="dot dot-idle"></span> در انتظار نمونه
+        {% else %}<span class="dot dot-off"></span> <span class="muted small" title="{{ st.get('error') }}">قطع</span>{% endif %}
+      </td>
+      <td class="live-cell" data-live="info">—</td>
+      <td class="live-cell" data-live="pps">—</td>
+      <td class="row-actions">
+        <button class="btn btn-sm" data-act="test">تست اتصال</button>
+        <a class="btn btn-sm" href="{{ url_for('editor_page', node=n.id) }}">کانفیگ</a>
+        <a class="btn btn-sm" href="{{ url_for('history_page', node_id=n.id) }}">تاریخچه</a>
+        <a class="btn btn-sm btn-ghost" href="{{ url_for('node_form', node_id=n.id) }}">ویرایش</a>
+        <form method="post" action="{{ url_for('node_delete', node_id=n.id) }}" class="inline"
+              onsubmit="return confirm('نود {{ n.name }} و تاریخچه‌ی آن حذف شود؟')">
+          <button class="btn btn-sm btn-danger">حذف</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">
+  <p>هنوز نودی ثبت نشده است.</p>
+  <p class="muted">روی هر سرور، مقدار <code>api.bind</code> کانفیگ injspoof را یادداشت
+    کنید و اینجا همان آدرس + توکن را وارد کنید.</p>
+  <a class="btn btn-primary" href="{{ url_for('node_form') }}">ثبت نود اول</a>
+</div>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head"><h2>نکته‌ی امنیت</h2></div>
+  <p class="hint">API هسته روی همه‌ی مسیرها از جمله <code>PUT /api/v1/config</code> و
+    <code>POST /api/v1/reload</code> اجازه‌ی تغییر کانفیگ می‌دهد. اگر <code>api.bind</code>
+    را روی <code>0.0.0.0</code> گذاشته باشید، هر کسی که توکن را داشته باشد کانفیگ شبکه‌ی شما
+    را عوض می‌کند. پیش‌فرض امن: <code>127.0.0.1:9090</code>.</p>
+</section>
+{% endblock %}
+{% block scripts %}<script>PB.nodes.init();</script>{% endblock %}

@@ -1,0 +1,51 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+injspoof
+ipfinder/ipfinder
+ipfinder/valid_ips.txt
+ipfinder/candidates.txt
+ipfinder/ipfinder-*.valid.txt
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Runtime artefacts that should never be committed.
+# These often contain real IPs / MAC addresses / tokens.
+*.log
+*.pcap
+*.pcapng
+ips.txt
+c.json
+s.json
+*.local.json
+dashboard/dashboard.db
+
+# Old/forked tree kept locally for reference only.
+injspoof-old/

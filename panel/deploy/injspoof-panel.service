@@ -1,0 +1,33 @@
+[Unit]
+Description=injspoof management panel (Flask + gunicorn)
+Documentation=file:@@PREFIX@@/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=@@USER@@
+Group=@@USER@@
+WorkingDirectory=@@PREFIX@@
+EnvironmentFile=@@ENVFILE@@
+# تنها یک worker: نخ نمونه‌بردار (Collector) داخل هر worker یک‌بار اجرا می‌شود؛
+# با workerهای بیشتر، هر نمونه‌برداری چند بار روی نودها زده می‌شود.
+# کار بار شبکه‌ای است و gthread کشش لازم را می‌دهد.
+ExecStart=@@VENV@@/bin/gunicorn \
+    --bind @@HOST@@:@@PORT@@ \
+    --worker-class gthread --workers 1 --threads 8 \
+    --timeout 60 --graceful-timeout 30 --keep-alive 5 \
+    --access-logfile - --error-logfile - --capture-output \
+    --chdir @@PREFIX@@ app:APP
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=@@STATEDIR@@
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

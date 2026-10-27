@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}ویرایشگر کانفیگ — پنل injspoof{% endblock %}
+{% block body %}
+<header class="page-head">
+  <div>
+    <h1>ویرایشگر کانفیگ</h1>
+    <p class="muted">خوانده‌شده از <code>GET /api/v1/config</code> و اعمال با
+      <code>PUT</code> + <code>POST /api/v1/reload</code>. تا یک خطای جدی باشد،
+      دکمه‌ی اعمال قفل است.</p>
+  </div>
+  <div class="node-picker">
+    <select id="node-select" class="input">
+      <option value="">— نود را انتخاب کنید —</option>
+      {% for n in nodes %}
+      <option value="{{ n.id }}" {{ 'selected' if node and n.id == node.id }}>
+        {{ n.name }} — {{ 'کلاینت' if n.role == 'client' else 'سرور' }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-primary" id="btn-load">بارگذاری از نود</button>
+  </div>
+</header>
+
+{% if node %}
+<div class="editor-grid">
+  <section class="editor-main">
+    <div class="tabs">
+      <button class="tab active" data-tab="tree">فرم درختی</button>
+      <button class="tab" data-tab="raw">JSON خام</button>
+      <span class="spacer"></span>
+      <span id="dirty-flag" class="chip chip-dirty hidden">تغییرهای اعمال‌نشده</span>
+    </div>
+
+    <div class="tab-pane" id="pane-tree">
+      <div class="tree-tools">
+        <button class="btn btn-sm" id="btn-expand">باز کردن همه</button>
+        <button class="btn btn-sm" id="btn-collapse">بستن همه</button>
+        <span class="muted small">روی مقدار کلیک کنید تا قابل ویرایش شود؛
+          نوع داده (رشته/عدد/بولی) خودکار تشخیص داده می‌شود.</span>
+      </div>
+      <div id="tree" class="tree"></div>
+    </div>
+
+    <div class="tab-pane hidden" id="pane-raw">
+      <textarea id="raw-json" class="code-area" spellcheck="false"
+                placeholder='{ "api": { ... } }'></textarea>
+      <div class="actions">
+        <button class="btn btn-sm" id="btn-pretty">قالب‌بندی</button>
+        <button class="btn btn-sm" id="btn-apply-raw">برگرداندن به درخت</button>
+      </div>
+    </div>
+
+    <div class="apply-bar">
+      <input class="input" id="apply-note" placeholder="توضیح این تغییر (برای تاریخچه)">
+      <select class="input input-sm" id="reload-mode">
+        <option value="hot">hot reload</option>
+        <option value="hard">hard reload (execve)</option>
+        <option value="none">بدون reload (فقط نوشتن فایل)</option>
+      </select>
+      <button class="btn btn-primary" id="btn-validate">اعتبارسنجی</button>
+      <button class="btn btn-success" id="btn-apply">اعمال روی نود</button>
+      <a class="btn btn-ghost" id="btn-download">دانلود</a>
+      <a class="btn btn-ghost" href="{{ url_for('history_page', node_id=node.id) }}">تاریخچه</a>
+    </div>
+    <div id="apply-result" class="result hidden"></div>
+  </section>
+
+  <aside class="editor-side">
+    <div class="panel">
+      <div class="panel-head"><h2>نتیجه‌ی بررسی</h2><span id="issue-count" class="muted"></span></div>
+      <div id="issues" class="issues">
+        <p class="muted">هنوز بررسی نشده.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>ظرفیت استخر مبدأ</h2></div>
+      <table class="tbl" id="capacity">
+        <thead><tr><th>rule</th><th>IP</th><th>پورت</th><th>جریان هم‌زمان</th></tr></thead>
+        <tbody><tr><td colspan="4" class="muted">—</td></tr></tbody>
+      </table>
+      <p class="hint">ظرفیت = تعداد IP استخر × تعداد پورت مبدأ. اگر کمتر از تعداد
+        جریان‌های هم‌زمان شما باشد، tupleها پیش از پایان عمر جریان بازچرخانی می‌شوند
+        و پاسخ‌ها به اشتباه route می‌شوند.</p>
+    </div>
+
+    <div class="panel panel-rules">
+      <div class="panel-head"><h2>قواعدی که پنل از سورس استخراج کرده</h2></div>
+      <ul class="rules">
+        <li><b>فقط <code>dst_ports[0]</code> روی سیم می‌نشیند.</b> بقیه‌ی پورت‌های مقصد
+          در لیست نادیده گرفته می‌شوند <span class="src">src/client.c:507</span></li>
+        <li><b>فیلتر incoming فقط IP مبدأ و پورت مبدأ را مقایسه می‌کند.</b>
+          پس <code>incoming.port.src</code> باید پورت‌های <code>outgoing.port.src</code>
+          حریف را بپوشاند <span class="src">src/server.c:95-111</span></li>
+        <li><b>با encapsulation ICMP هیچ پورت مبدأی وجود ندارد؛</b> اگر
+          <code>incoming.port.src</code> پر باشد همه‌ی فریم‌ها drop می‌شوند
+          <span class="src">src/server.c:143</span></li>
+        <li><b>پورت مبدأ/مقصد خالی در outgoing = تصادفی در زمان بوت</b>؛ حریف نمی‌تواند
+          فیلتر دقیق بچیند <span class="src">src/config.c:458-468</span></li>
+        <li><b><code>api.token</code> خالی = فقط در حالتی که لودر اجازه می‌دهد</b>؛ در
+          واقع توکن اجباری و غیرخالی است <span class="src">src/config.c:587</span></li>
+      </ul>
+    </div>
+  </aside>
+</div>
+{% else %}
+<div class="empty">
+  <p>نودی انتخاب نشده است.</p>
+  <p class="muted">از منوی «نودها» یک نود ثبت کنید (آدرس API همان <code>api.bind</code>
+    و توکن همان <code>api.token</code> کانفیگ است) بعد اینجا بارگذاری کنید.</p>
+  <a class="btn btn-primary" href="{{ url_for('node_form') }}">ثبت نود</a>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script>PB.editor.init();</script>{% endblock %}

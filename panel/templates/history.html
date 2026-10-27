@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}تاریخچه کانفیگ — پنل injspoof{% endblock %}
+{% block body %}
+<header class="page-head">
+  <div>
+    <h1>تاریخچهٔ کانفیگ — {{ node.name }}</h1>
+    <p class="muted">پنل قبل از هر <code>PUT /api/v1/config</code> نسخه‌ی فعلی نود را
+      بکاپ می‌گیرد؛ چون این endpoint کل فایل را جایگزین می‌کند.</p>
+  </div>
+  <a class="btn btn-ghost" href="{{ url_for('editor_page', node=node.id) }}">ویرایشگر</a>
+</header>
+
+{% if versions %}
+<table class="tbl tbl-wide">
+  <thead><tr><th>#</th><th>زمان</th><th>منبع</th><th>توضیح</th><th>SHA-256</th><th>حجم</th><th></th></tr></thead>
+  <tbody>
+  {% for v in versions %}
+    <tr>
+      <td>{{ v.id }}</td>
+      <td class="mono" dir="ltr">{{ v.created_at }} <span class="muted small">UTC</span></td>
+      <td><span class="chip chip-{{ v.source }}">{{ v.source }}</span></td>
+      <td>{{ v.note }}</td>
+      <td class="mono small" dir="ltr">{{ v.sha256[:12] }}…</td>
+      <td dir="ltr">{{ v.bytes }} B</td>
+      <td class="row-actions">
+        <button class="btn btn-sm" data-view="{{ v.id }}">نمایش</button>
+        <form method="post" action="{{ url_for('version_rollback', version_id=v.id) }}"
+              class="inline" onsubmit="return confirm('این نسخه روی نود اعمال شود؟')">
+          <button class="btn btn-sm btn-primary">بازگشت به این نسخه</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<pre id="version-view" class="code hidden"></pre>
+{% else %}
+<div class="empty"><p>هنوز نسخه‌ای ثبت نشده. یک‌بار کانفیگ را از نود بارگذاری کنید.</p>
+  <a class="btn btn-primary" href="{{ url_for('editor_page', node=node.id) }}">رفتن به ویرایشگر</a></div>
+{% endif %}
+{% endblock %}
+{% block scripts %}<script>PB.history.init();</script>{% endblock %}

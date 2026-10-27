@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}داشبورد زنده — پنل injspoof{% endblock %}
+{% block body %}
+<div id="dash" data-node="{{ selected or '' }}">
+  <header class="page-head">
+    <div>
+      <h1>داشبورد زنده</h1>
+      <p class="muted">شمارنده‌ها هر 2 ثانیه از <code>GET /api/v1/stats</code> نود خوانده می‌شود.</p>
+    </div>
+    <div class="node-picker">
+      {% if nodes %}
+      <select id="node-select" class="input">
+        {% for n in nodes %}
+        <option value="{{ n.id }}" {{ 'selected' if n.id == selected }}>
+          {{ n.name }} — {{ n.role }}
+        </option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <a class="btn btn-primary" href="{{ url_for('node_form') }}">اولین نود را ثبت کنید</a>
+      {% endif %}
+    </div>
+  </header>
+
+  {% if nodes %}
+  <section class="stat-grid">
+    <div class="stat"><span class="stat-label">سلامت نود</span>
+      <b id="k-health" class="stat-value">…</b><small id="k-health-sub" class="muted"></small></div>
+    <div class="stat"><span class="stat-label">حالت / نسخه</span>
+      <b id="k-mode" class="stat-value">—</b><small id="k-version" class="muted"></small></div>
+    <div class="stat"><span class="stat-label">Uptime</span>
+      <b id="k-uptime" class="stat-value">—</b><small id="k-pid" class="muted"></small></div>
+    <div class="stat"><span class="stat-label">بسته در ثانیه</span>
+      <b id="k-pps" class="stat-value">—</b><small id="k-pps-total" class="muted"></small></div>
+    <div class="stat"><span class="stat-label">پهنای باند</span>
+      <b id="k-bps" class="stat-value">—</b><small id="k-bps-total" class="muted"></small></div>
+    <div class="stat stat-warn"><span class="stat-label">Drop کل</span>
+      <b id="k-drops" class="stat-value">—</b><small id="k-drops-rate" class="muted"></small></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>ترافیک زنده</h2>
+      <div class="legend">
+        <span class="lg lg-in">ورودی</span><span class="lg lg-out">خروجی</span>
+        <span class="lg lg-frag">فرگمنت</span>
+      </div>
+    </div>
+    <div class="charts">
+      <div class="chart-box">
+        <h3>بسته بر ثانیه</h3>
+        <canvas id="chart-pps" height="150"></canvas>
+      </div>
+      <div class="chart-box">
+        <h3>بایت بر ثانیه</h3>
+        <canvas id="chart-bps" height="150"></canvas>
+      </div>
+      <div class="chart-box">
+        <h3>Drop بر ثانیه</h3>
+        <canvas id="chart-drops" height="150"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <section class="two-col">
+    <div class="panel">
+      <div class="panel-head"><h2>علت‌های Drop</h2>
+        <span class="muted">سرانه‌ی ثانویه از اختلاف نمونه‌ها</span></div>
+      <table class="tbl" id="drops-table">
+        <thead><tr><th>علت</th><th>تجمعی</th><th>Rate</th></tr></thead>
+        <tbody><tr><td colspan="3" class="muted">در انتظار داده…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>استخر IP مبدأ</h2>
+        <span class="muted">/api/v1/stats/pool</span></div>
+      <div class="pool-meter">
+        <div class="meter"><span id="pool-bar"></span></div>
+        <div class="pool-nums">
+          <div><span>موجود</span><b id="pool-avail">—</b></div>
+          <div><span>ظرفیت</span><b id="pool-cap">—</b></div>
+          <div><span>Hit / Miss</span><b id="pool-hits">—</b><span class="slash">/</span><b id="pool-misses">—</b></div>
+        </div>
+      </div>
+      <table class="tbl" id="sys-table">
+        <thead><tr><th>System call</th><th>تعداد</th></tr></thead>
+        <tbody><tr><td colspan="2" class="muted">—</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>لاگر و Reload</h2></div>
+      <table class="tbl" id="ops-table">
+        <thead><tr><th>شاخص</th><th>مقدار</th></tr></thead>
+        <tbody><tr><td colspan="2" class="muted">—</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>کنترل سریع</h2></div>
+      <div class="actions">
+        <button class="btn" id="btn-hot">Hot reload</button>
+        <button class="btn btn-danger" id="btn-hard">Hard reload (execve)</button>
+        <a class="btn" id="link-editor" href="{{ url_for('editor_page') }}">ویرایش کانفیگ این نود</a>
+        <a class="btn" id="link-history" href="#">تاریخچه و بازگشت</a>
+        <button class="btn btn-ghost" id="btn-refresh">همين حالا نمونه‌برداری</button>
+      </div>
+      <p class="hint">Hard reload هسته را با <code>execve()</code> جایگزین می‌کند؛ PID حفظ
+        می‌شود ولی لحظه‌ای ترافیک قطع می‌گردد.</p>
+    </div>
+  </section>
+
+  <p class="foot-note muted">نمودارها در حافظه‌ی پنل نگه داشته می‌شوند؛ پس با رفتن و
+    برگشتن به این صفحه history نمودار از دست نمی‌رود.</p>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script>PB.dash.init();</script>{% endblock %}

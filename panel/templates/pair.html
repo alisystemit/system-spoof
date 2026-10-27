@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}ویزارد جفت کانفیگ — پنل injspoof{% endblock %}
+{% block body %}
+<header class="page-head">
+  <div>
+    <h1>ویزارد جفت کانفیگ</h1>
+    <p class="muted">یک بار اطلاعات را وارد کنید؛ <code>client.json</code> و
+      <code>server.json</code> هم‌راستا تولید می‌شوند، به‌همراه اسکریپت فایروال هر دو ماشین.</p>
+  </div>
+  <select id="pair-select" class="input">
+    <option value="">pair جدید</option>
+    {% for p in pairs %}<option value="{{ p.id }}" {{ 'selected' if pair and p.id == pair.id }}>{{ p.name }}</option>{% endfor %}
+  </select>
+</header>
+
+<form id="wizard" class="wizard" onsubmit="return false;">
+  <input type="hidden" id="pair-id" value="{{ pair.id if pair else '' }}">
+
+  <fieldset class="panel">
+    <legend>1. مشخصات مشترک تونل</legend>
+    <div class="form-grid">
+      <label>نام pair
+        <input class="input" name="name" id="f-name" value="{{ (pair.spec.name if pair and pair.spec else '') or 'pair-1' }}"></label>
+      <label>HID (5 کاراکتر، در دو طرف یکسان)
+        <input class="input mono" name="hid" id="f-hid" maxlength="5"
+               value="{{ (pair.hid if pair else '') or '' }}" placeholder="خودکار"></label>
+      <label>Encapsulation روی سیم
+        <select class="input" name="protocol" id="f-protocol">
+          <option value="tcp">tcp</option><option value="udp">udp</option><option value="icmp">icmp</option>
+        </select></label>
+      <label>پورت مقصد روی سیم (dst_ports[0])
+        <input class="input" name="wire_dst_port" id="f-wire_dst_port" type="number" min="1" max="65535" value="443"></label>
+      <label>fragment_size
+        <input class="input" name="fragment_size" id="f-fragment_size" type="number" min="576" max="9216" value="1400"></label>
+      <label>tag اینترفیس
+        <input class="input mono" name="iface_tag" id="f-iface_tag" value="wan"></label>
+      <div data-only="tcp" class="span2">
+        <div class="form-grid">
+          <label>TCP flags<input class="input mono" name="tcp_flags" id="f-tcp_flags" value="psh+ack"></label>
+          <label>SEQ policy
+            <select class="input" name="tcp_seq" id="f-tcp_seq">
+              <option>fixed</option><option>random</option><option>sequential</option>
+            </select></label>
+          <label>seq_base<input class="input mono" name="seq_base" id="f-seq_base" value="0x12345678"></label>
+          <label>ack_base<input class="input mono" name="ack_base" id="f-ack_base" value="0x87654321"></label>
+        </div>
+      </div>
+      <div data-only="icmp" class="span2 hidden">
+        <div class="form-grid">
+          <label>icmp_type<input class="input" name="icmp_type" id="f-icmp_type" type="number" min="0" max="255" value="8"></label>
+          <label>icmp_code<input class="input" name="icmp_code" id="f-icmp_code" type="number" min="0" max="255" value="0"></label>
+        </div>
+        <p class="hint">در حالت ICMP پنل فیلتر <code>port.src</code> بخش incoming را حذف
+          می‌کند، چون روی فریم ICMP پورتی وجود ندارد و هر لیست پورتی همه‌چیز را drop می‌کند.</p>
+      </div>
+      <label>fastpath
+        <select class="input" name="fastpath_mode" id="f-fastpath_mode">
+          <option value="auto">auto (پیشنهادی)</option>
+          <option value="af_packet">af_packet</option>
+          <option value="af_xdp">af_xdp</option>
+        </select></label>
+      <label>سطح لاگ
+        <select class="input" name="log_level" id="f-log_level">
+          <option>info</option><option>warn</option><option>error</option><option>debug</option><option>trace</option><option>fatal</option>
+        </select></label>
+    </div>
+  </fieldset>
+
+  <div class="two-col">
+    <fieldset class="panel" data-side="client">
+      <legend>2. سمت کلاینت</legend>
+      <div class="form-grid">
+        <label class="span2">API bind
+          <input class="input mono" name="client.api_bind" id="f-client.api_bind" value="127.0.0.1:9091"></label>
+        <label class="span2">API token
+          <input class="input mono" name="client.api_token" id="f-client.api_token" placeholder="خالی = خودکار">
+          <button type="button" class="btn btn-sm" data-gen-token="client">توکن تصادفی</button></label>
+        <label>iface <bdi dir="ltr">(ip -br a)</bdi>
+          <input class="input mono" name="client.iface" id="f-client.iface" value="eth0"></label>
+        <label>MAC gateway <bdi dir="ltr">(ip neigh)</bdi>
+          <input class="input mono" name="client.gw_mac" id="f-client.gw_mac" placeholder="aa:bb:cc:dd:ee:ff"></label>
+        <label class="span2">IP واقعی سرور (peer.address)
+          <input class="input mono" name="client.public_ip" id="f-client.public_ip" placeholder="IP نود مقابل"></label>
+        <label class="span2">استخر IP مبدأ جعلی (هر خط یک CIDR/IP)
+          <textarea class="input code-area-sm" name="client.pool" id="f-client.pool" rows="3"></textarea></label>
+        <label class="span2">پورت‌های مبدأ روی سیم (comma)
+          <input class="input mono" name="client.src_ports" id="f-client.src_ports" value="3232"></label>
+      </div>
+    </fieldset>
+
+    <fieldset class="panel" data-side="server">
+      <legend>3. سمت سرور</legend>
+      <div class="form-grid">
+        <label class="span2">API bind
+          <input class="input mono" name="server.api_bind" id="f-server.api_bind" value="127.0.0.1:9090"></label>
+        <label class="span2">API token
+          <input class="input mono" name="server.api_token" id="f-server.api_token" placeholder="خالی = خودکار">
+          <button type="button" class="btn btn-sm" data-gen-token="server">توکن تصادفی</button></label>
+        <label>iface
+          <input class="input mono" name="server.iface" id="f-server.iface" value="eth0"></label>
+        <label>MAC gateway
+          <input class="input mono" name="server.gw_mac" id="f-server.gw_mac" placeholder="aa:bb:cc:dd:ee:ff"></label>
+        <label class="span2">IP واقعی کلاینت (peer.address)
+          <input class="input mono" name="server.public_ip" id="f-server.public_ip" placeholder="IP نود مقابل"></label>
+        <label class="span2">استخر IP مبدأ جعلی
+          <textarea class="input code-area-sm" name="server.pool" id="f-server.pool" rows="3"></textarea></label>
+        <label class="span2">پورت‌های مبدأ روی سیم
+          <input class="input mono" name="server.src_ports" id="f-server.src_ports" value="5454"></label>
+      </div>
+    </fieldset>
+  </div>
+
+  <fieldset class="panel">
+    <legend>4. Forwarder های سمت کلاینت (UDP محلی → مقصد در سرور)</legend>
+    <table class="tbl" id="fwd-table">
+      <thead><tr><th>bind (گوش‌سپار محلی)</th><th>redirect (مقصد در سرور)</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <button type="button" class="btn btn-sm" id="btn-add-fwd">+ forwarder جدید</button>
+    <p class="hint">HID و مقصد redirect داخل هدر 11 بایتی بسته می‌نشینند
+      (5 بایت HID + 4 بایت IP + 2 بایت پورت)، پس سرور بدون جدول مسیریابی per-peer
+      می‌فهمد payload را کجا بدهد. مثال رایج: bind=127.0.0.1:51820 برای WireGuard.</p>
+  </fieldset>
+
+  <div class="actions sticky-actions">
+    <button type="button" class="btn btn-primary" id="btn-preview">پیش‌نمایش و بررسی</button>
+    <button type="button" class="btn" id="btn-save">ذخیره‌ی pair</button>
+    <label class="check">
+      <input type="checkbox" id="f-fill-example" checked>
+      <span>نمونه‌ی قابل‌اجرا (TEST-NET) را پیش‌پر کن</span>
+    </label>
+  </div>
+</form>
+
+<section id="preview" class="panel hidden">
+  <div class="panel-head"><h2>پیش‌نمایش</h2>
+    <span id="preview-badge" class="chip"></span>
+    <span class="spacer"></span>
+    <a class="btn btn-sm" id="btn-download">دانلود ZIP (کانفیگ + فایروال)</a>
+  </div>
+
+  <div id="preview-issues" class="issues"></div>
+
+  <div class="two-col">
+    <div class="code-pane">
+      <div class="code-head"><b>client.json</b>
+        <button class="btn btn-sm" data-copy="client">کپی</button>
+        <a class="btn btn-sm" data-dl="client.json" href="#">دانلود</a></div>
+      <pre id="out-client" class="code"></pre>
+    </div>
+    <div class="code-pane">
+      <div class="code-head"><b>server.json</b>
+        <button class="btn btn-sm" data-copy="server">کپی</button>
+        <a class="btn btn-sm" data-dl="server.json" href="#">دانلود</a></div>
+      <pre id="out-server" class="code"></pre>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="code-pane">
+      <div class="code-head"><b>client-firewall.sh</b>
+        <button class="btn btn-sm" data-copy="client_nft">کپی</button></div>
+      <pre id="out-client-nft" class="code"></pre>
+    </div>
+    <div class="code-pane">
+      <div class="code-head"><b>server-firewall.sh</b>
+        <button class="btn btn-sm" data-copy="server_nft">کپی</button></div>
+      <pre id="out-server-nft" class="code"></pre>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>اعمال خودکار روی نودها</h2></div>
+    <div class="form-grid">
+      <label>نود کلاینت
+        <select class="input" id="push-client">
+          <option value="">— انتخاب نکن —</option>
+          {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }} ({{ n.role }})</option>{% endfor %}
+        </select></label>
+      <label>نود سرور (peer جدید merge می‌شود)
+        <select class="input" id="push-server">
+          <option value="">— انتخاب نکن —</option>
+          {% for n in nodes %}<option value="{{ n.id }}">{{ n.name }} ({{ n.role }})</option>{% endfor %}
+        </select></label>
+    </div>
+    <div class="actions">
+      <button class="btn btn-danger" id="btn-push">اعمال روی نودها (PUT + hot reload)</button>
+      <button class="btn" id="btn-check-live">بررسی هم‌راستایی کانفیگ زنده</button>
+    </div>
+    <div id="push-result" class="result hidden"></div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>pair های ذخیره‌شده</h2></div>
+  {% if pairs %}
+  <table class="tbl">
+    <thead><tr><th>نام</th><th>HID</th><th>آخرین تغییر</th><th>کارها</th></tr></thead>
+    <tbody>
+    {% for p in pairs %}
+      <tr>
+        <td><a href="{{ url_for('pair_page', pair=p.id) }}">{{ p.name }}</a></td>
+        <td class="mono">{{ p.hid }}</td>
+        <td class="mono small">{{ p.updated_at }} UTC</td>
+        <td class="row-actions">
+          <a class="btn btn-sm" href="{{ url_for('pair_download', pair_id=p.id) }}">ZIP</a>
+          <form method="post" action="{{ url_for('pair_delete', pair_id=p.id) }}" class="inline"
+                onsubmit="return confirm('pair {{ p.name }} حذف شود؟')">
+            <button class="btn btn-sm btn-danger">حذف</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">pair ذخیره‌نشده‌ای نیست.</p>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+{% if pair and pair.spec %}
+<script id="pair-data" type="application/json">{{ pair.spec | tojson }}</script>
+{% endif %}
+<script>PB.pair.init();</script>
+{% endblock %}

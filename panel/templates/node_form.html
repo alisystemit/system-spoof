@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}نود جدید — پنل injspoof{% endblock %}
+{% block body %}
+<header class="page-head">
+  <div>
+    <h1>{{ 'ویرایش نود' if node else 'ثبت نود جدید' }}</h1>
+    <p class="muted">این اطلاعات فقط برای تماس پنل با API هسته استفاده می‌شود.</p>
+  </div>
+  <a class="btn btn-ghost" href="{{ url_for('nodes_page') }}">بازگشت</a>
+</header>
+
+<form method="post" class="panel form-grid">
+  <label>نام نود
+    <input class="input" name="name" required placeholder="vps-berlin-client"
+           value="{{ node.name if node else '' }}"></label>
+
+  <label>نقش
+    <select class="input" name="role">
+      <option value="server" {{ 'selected' if node and node.role == 'server' }}>سرور</option>
+      <option value="client" {{ 'selected' if node and node.role == 'client' }}>کلاینت</option>
+    </select></label>
+
+  <label class="span2">آدرس API (همان <code>api.bind</code> کانفیگ)
+    <input class="input mono" name="api_url" required dir="ltr" placeholder="http://127.0.0.1:9090"
+           value="{{ node.api_url if node else 'http://127.0.0.1:9090' }}"></label>
+
+  <label class="span2">توکن Bearer (<code>api.token</code>)
+    <input class="input mono" name="api_token" id="token-field" autocomplete="off"
+           spellcheck="false" placeholder="{{ tokens.placeholder }}"
+           value="">
+    <small class="muted">
+      {% if tokens.set %}
+      توکن ذخیره‌شده (<code>{{ tokens.preview }}</code>) برای امنیت در این صفحه
+      نمایش داده نمی‌شود؛ خالی بگذارید تا دست‌نخورده بماند.
+      {% else %}
+      یک مقدار بلند و تصادفی بگذارید: <code>openssl rand -hex 32</code>
+      {% endif %}
+    </small></label>
+
+  <label class="span2">مسیر کانفیگ روی سرور (اختیاری — فقط یادداشت)
+    <input class="input mono" name="config_path" dir="ltr"
+           placeholder="/etc/injspoof/server.json"
+           value="{{ node.config_path if node else '' }}"></label>
+
+  <label class="span2">یادداشت
+    <input class="input" name="note" placeholder="Hetzner / CX22 / WG 51820"
+           value="{{ node.note if node else '' }}"></label>
+
+  <label class="check span2">
+    <input type="checkbox" name="enabled" value="1" {{ 'checked' if not node or node.enabled }}>
+    <span>نود فعال است (پنل هر {{ interval }} ثانیه شمارنده‌هایش را نمونه‌برداری می‌کند)</span>
+  </label>
+
+  <label class="check span2">
+    <input type="checkbox" name="check_token" value="1" checked>
+    <span>بعد از ذخیره، health و info نود را واقعاً تست کن</span>
+  </label>
+
+  <div class="span2 actions">
+    <button class="btn btn-primary" type="submit">ذخیره و تست</button>
+    <a class="btn btn-ghost" href="{{ url_for('nodes_page') }}">انصراف</a>
+  </div>
+</form>
+
+<section class="panel">
+  <div class="panel-head"><h2>از کجا این مقدارها را بگیرم؟</h2></div>
+  <pre class="code">grep -A3 '"api"' /etc/injspoof/server.json
+# api.bind -> آدرس API،  api.token -> توکن</pre>
+</section>
+{% endblock %}
